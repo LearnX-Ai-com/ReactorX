@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 
-// Split out of PeriodicTableRoom.tsx (a component file) so both that file
-// and ChamberAtomTray.tsx can share this without mixing component and
-// non-component exports in one module — see layout.ts's identical rationale
-// ("mixing component and non-component exports in one file defeats fast
-// refresh").
+// Split out of PeriodicTableRoom.tsx (a component file) so it doesn't mix
+// component and non-component exports in one module — see layout.ts's
+// identical rationale ("mixing component and non-component exports in one
+// file defeats fast refresh").
 const labelTextureCache = new Map<string, THREE.CanvasTexture>();
 export function labelTexture(symbol: string): THREE.CanvasTexture {
   let tex = labelTextureCache.get(symbol);

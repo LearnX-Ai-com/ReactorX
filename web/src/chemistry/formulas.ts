@@ -16,13 +16,28 @@ export function parseFormula(formula: string): Record<string, number> {
 // separate deployable unit and can't import across the boundary. Keep the
 // two in sync rather than pulling in a shared-package build step for one
 // function each.
-/** Hill-system-ish canonical formula string from an atom composition, so the
- * same composition always produces the same cache key regardless of the
- * order atoms were picked in: Carbon first (if present), then Hydrogen,
- * then everything else alphabetically — e.g. {H:4, C:1} -> "CH4". */
+/** Canonical formula string from an atom composition, so the same
+ * composition always produces the same cache key regardless of the order
+ * atoms were picked in. Two conventions, chosen by whether carbon is
+ * present:
+ *  - Carbon present: Hill system (C, then H, then everything else
+ *    alphabetically) — the standard for organic formulas, e.g. {H:4,C:1} ->
+ *    "CH4", {C:2,H:6,O:1} -> "C2H6O".
+ *  - No carbon: ascending electronegativity, i.e. the more electropositive
+ *    (metallic/cation-like) element first — {K:1,Cl:1} -> "KCl", not the
+ *    "ClK" a plain alphabetical sort would give. This matches how ionic
+ *    compounds are conventionally written (cation before anion) for the
+ *    overwhelming majority of binary salts a student can build here. It's
+ *    not a universal nomenclature engine: a handful of hydrogen-nonmetal
+ *    covalent compounds (NH3, PH3) have a historical formula that doesn't
+ *    follow any monotonic element-ordering rule — a known, narrow gap. */
 export function canonicalFormula(counts: Record<string, number>): string {
   const symbols = Object.keys(counts).filter((s) => counts[s] > 0);
-  const rank = (s: string): number => (s === 'C' ? 0 : s === 'H' ? 1 : 2);
+  const hasCarbon = symbols.includes('C');
+  const rank = (s: string): number => {
+    if (hasCarbon) return s === 'C' ? -2 : s === 'H' ? -1 : 0;
+    return ELEMENTS[s]?.en ?? 99;
+  };
   symbols.sort((a, b) => {
     const r = rank(a) - rank(b);
     if (r !== 0) return r;

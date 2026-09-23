@@ -1,25 +1,31 @@
 import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { ChamberAtomTray, type ReactantSlot, type TrayCard } from './ChamberAtomTray';
+import { ELEMENTS } from '../chemistry/elements';
+import { matchesFilter, type CategoryFilter } from '../chemistry/elementFilter';
+import type { Reaction, ReactantSlot, TrayCard } from '../chemistry/types';
+import { ChamberAtomTray } from './ChamberAtomTray';
+import { ChamberIonPanel } from './ChamberIonPanel';
 import { Ion } from './Ion';
 import { attachLookControls, type LookState } from './lookControls';
 import { PeriodicTableRoom } from './PeriodicTableRoom';
 import { ReactionChamberModel, type ChamberSnapshot, type ReactionChamberHandle } from './ReactionChamber';
 
 // Room layout: player stands near the origin at eye height, yaw=0 faces the
-// reaction wall (-Z); turning left brings the atom-picker wall (-X) into
-// view — same "turn to see a different wall" convention ElementsRoom
-// established. FRONT_WALL sits further back than ElementsRoom's walls since
-// the reaction layout itself spans ~13 units (ANCHOR_A..ANCHOR_P2 in
-// ReactionChamber.tsx). LEFT_WALL_ROTATION turns the table/tray to face back
-// toward the origin — a wall placed along ±X (unlike ElementsRoom's, which
-// sits straight ahead along -Z) reads edge-on without this.
+// reaction wall (-Z); turning left brings the element-picker wall (-X) into
+// view, turning right brings the reaction-info/Ion wall (+X) — same "turn to
+// see a different wall" convention ElementsRoom established. FRONT_WALL sits
+// further back than ElementsRoom's walls since the reaction layout itself
+// spans ~13 units (ANCHOR_A..ANCHOR_P2 in ReactionChamber.tsx).
+// *_WALL_ROTATION turns 3D wall content to face back toward the origin — a
+// wall placed along ±X (unlike ElementsRoom's, which sits straight ahead
+// along -Z) reads edge-on without this.
 const EYE_HEIGHT = 1.6;
 const FRONT_WALL: [number, number, number] = [0, EYE_HEIGHT, -14];
 const LEFT_WALL: [number, number, number] = [-9, EYE_HEIGHT, -1];
 const LEFT_WALL_ROTATION: [number, number, number] = [0, Math.PI / 2, 0];
-const ION_SPOT: [number, number, number] = [2.5, EYE_HEIGHT + 0.1, -5];
+const RIGHT_WALL: [number, number, number] = [9, EYE_HEIGHT, -1];
+const ION_SPOT: [number, number, number] = [7.2, EYE_HEIGHT + 0.1, -3];
 
 export interface ChamberRoomProps {
   chamberRef: React.RefObject<ReactionChamberHandle | null>;
@@ -27,6 +33,8 @@ export interface ChamberRoomProps {
   reactantB: string;
   coeffs: number[] | null;
   onChamberStateChange: (s: ChamberSnapshot) => void;
+  reaction: Reaction | null;
+  caption: string;
 
   activeBuildSlot: ReactantSlot;
   onSwitchSlot: (slot: ReactantSlot) => void;
@@ -37,27 +45,32 @@ export interface ChamberRoomProps {
   trayBusy: boolean;
   trayError: string | null;
   onConfirmTray: () => void;
+  elementCategory: CategoryFilter;
+  onElementCategoryChange: (v: CategoryFilter) => void;
 
   ionWaveKey: number;
-  onIonClick: () => void;
 }
 
 /**
  * The reaction chamber as a first-person room, mirroring ElementsRoom.tsx:
- * the reaction itself is the front wall, and the periodic-table atom tray is
- * the left wall for building a reactant atom by atom. The equation/balance
- * data lives in the docked HTML subpanel (App.tsx's ChamberOverlay) rather
- * than on a wall — tried as wall content first, but small interactive
- * controls (coefficient steppers, etc.) are easier to use in a fixed screen
- * panel than projected onto a 3D point you have to be looking at.
+ * the reaction plays out on the front wall, the periodic table + atom tray
+ * are the left wall, and reaction info + Ion's chat float on the right wall
+ * — all wall content (3D boxes / drei <Html> anchored to a 3D point), not
+ * screen-docked panels, per explicit direction that these should "float
+ * like the atoms do." Only the balancing/coefficient controls stay in a
+ * docked HTML subpanel (App.tsx's ChamberOverlay) — that one's on-screen by
+ * a separate, still-standing decision (small interactive steppers are
+ * easier to use in a fixed panel than projected onto a 3D point).
  */
 export function ChamberRoom({
-  chamberRef, reactantA, reactantB, coeffs, onChamberStateChange,
+  chamberRef, reactantA, reactantB, coeffs, onChamberStateChange, reaction, caption,
   activeBuildSlot, onSwitchSlot, trayCards, onAddCard, onRemoveCard, liveGuess, trayBusy, trayError, onConfirmTray,
-  ionWaveKey, onIonClick,
+  elementCategory, onElementCategoryChange,
+  ionWaveKey,
 }: ChamberRoomProps) {
   const { scene, camera, gl } = useThree();
   const lookRef = useRef<LookState>({ yaw: 0, pitch: 0 });
+  const chatInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const perspectiveCamera = camera as THREE.PerspectiveCamera;
@@ -109,12 +122,18 @@ export function ChamberRoom({
     camera.lookAt(eye.clone().add(dir));
   });
 
+  const filterActive = elementCategory !== 'all';
+  const dim = filterActive
+    ? (symbol: string) => !matchesFilter(ELEMENTS[symbol], '', elementCategory)
+    : undefined;
+
   return (
     <>
       <PeriodicTableRoom
         center={LEFT_WALL}
         rotation={LEFT_WALL_ROTATION}
         selected={trayCards[activeBuildSlot].map((c) => c.symbol)}
+        dim={dim}
         onSelectElement={onAddCard}
       />
       <ChamberAtomTray
@@ -130,6 +149,8 @@ export function ChamberRoom({
         onConfirm={onConfirmTray}
         reactantA={reactantA}
         reactantB={reactantB}
+        category={elementCategory}
+        onCategoryChange={onElementCategoryChange}
       />
 
       <ReactionChamberModel
@@ -142,7 +163,21 @@ export function ChamberRoom({
         roomOffset={FRONT_WALL}
       />
 
-      <Ion variant="small" position={ION_SPOT} smallPosition={ION_SPOT} waveKey={ionWaveKey} onClick={onIonClick} />
+      <ChamberIonPanel
+        position={RIGHT_WALL}
+        reactantA={reactantA}
+        reactantB={reactantB}
+        reaction={reaction}
+        caption={caption}
+        inputRef={chatInputRef}
+      />
+      <Ion
+        variant="small"
+        position={ION_SPOT}
+        smallPosition={ION_SPOT}
+        waveKey={ionWaveKey}
+        onClick={() => chatInputRef.current?.focus()}
+      />
     </>
   );
 }

@@ -40,26 +40,45 @@ export interface ElementTileProps {
   x: number;
   y: number;
   isSelected: boolean;
+  /** True when a search/category filter is active and this element doesn't
+   * match — the tile stays in place (so the grid layout doesn't jump around
+   * as the student types) but fades and desaturates rather than disappearing. */
+  dimmed?: boolean;
   onSelectElement: (symbol: string) => void;
 }
 
-/** A single "specimen box" tile — exported so other 3D content (e.g. the
- * chamber's atom tray) can spawn matching cards outside the table grid. */
-export function ElementTile({ el, x, y, isSelected, onSelectElement }: ElementTileProps) {
+/** A single "specimen box" tile — exported so other 3D content can spawn
+ * matching cards outside the table grid. */
+export function ElementTile({ el, x, y, isSelected, dimmed, onSelectElement }: ElementTileProps) {
   // BoxGeometry's material groups are ordered [+x, -x, +y, -y, +z, -z] —
   // index 4 (+z) is the face pointing back toward the player, so that's
   // the only one that gets the bright category color and the selection glow.
   const materials = useMemo(() => {
-    const side = new THREE.MeshStandardMaterial({ color: darken(el.color, 0.5), roughness: 0.55, metalness: 0.08 });
+    const sideColor = dimmed ? darken(el.color, 0.22) : darken(el.color, 0.6);
+    const side = new THREE.MeshStandardMaterial({
+      color: sideColor,
+      roughness: 0.4,
+      metalness: 0.05,
+      transparent: !!dimmed,
+      opacity: dimmed ? 0.35 : 1,
+      // A low-level self-glow (the tile's own category color, not just the
+      // selection highlight) is what actually reads as "neon" rather than
+      // just a brightly-lit colored box — every tile glows a little, the
+      // selected one glows a lot more, in the accent color.
+      emissive: sideColor,
+      emissiveIntensity: dimmed ? 0.03 : 0.28,
+    });
     const front = new THREE.MeshStandardMaterial({
-      color: el.color,
-      roughness: 0.35,
-      metalness: 0.12,
-      emissive: isSelected ? 0x2dd4bf : 0x000000,
-      emissiveIntensity: isSelected ? 0.7 : 0,
+      color: dimmed ? darken(el.color, 0.45) : el.color,
+      roughness: 0.25,
+      metalness: 0.08,
+      transparent: !!dimmed,
+      opacity: dimmed ? 0.35 : 1,
+      emissive: isSelected ? 0x2dd4bf : el.color,
+      emissiveIntensity: dimmed ? 0.04 : (isSelected ? 1.1 : 0.45),
     });
     return [side, side, side, side, front, side];
-  }, [el.color, isSelected]);
+  }, [el.color, isSelected, dimmed]);
 
   const z = isSelected ? SELECTED_POP : 0;
 
@@ -75,7 +94,7 @@ export function ElementTile({ el, x, y, isSelected, onSelectElement }: ElementTi
       </mesh>
       <mesh position={[0, 0, TILE_DEPTH / 2 + 0.01]}>
         <planeGeometry args={[TILE_SIZE * 0.7, TILE_SIZE * 0.7]} />
-        <meshBasicMaterial map={labelTexture(el.symbol)} transparent />
+        <meshBasicMaterial map={labelTexture(el.symbol)} transparent opacity={dimmed ? 0.35 : 1} />
       </mesh>
     </group>
   );
@@ -88,14 +107,15 @@ export interface PeriodicTableRoomProps {
   /** Rotates the whole grid so that local +Z (the tiles' front face) points
    * back toward wherever the player actually stands — required for any wall
    * not sitting directly along -Z from the origin (ElementsRoom's table
-   * happens to need none since its wall is straight ahead; a wall placed
-   * along ±X, like the chamber's, needs a ±90° yaw or it reads edge-on).
-   * Defaults to no rotation (facing +Z, the un-rotated case). */
+   * needs none since its wall is straight ahead; a wall placed along ±X
+   * would need a ±90° yaw or it reads edge-on). Defaults to no rotation
+   * (facing +Z, the un-rotated case). */
   rotation?: [number, number, number];
-  /** A single symbol (the atom explorer's one-at-a-time selection) or a list
-   * (the chamber's atom tray, where every symbol currently picked should
-   * glow, not just the most recent one). */
+  /** A single symbol, or a list to highlight more than one at once. */
   selected?: string | string[];
+  /** True for a symbol that fails the active search/category filter (see
+   * chemistry/elementFilter.ts) — undefined/omitted means no filter active. */
+  dim?: (symbol: string) => boolean;
   onSelectElement: (symbol: string) => void;
 }
 
@@ -105,7 +125,7 @@ export interface PeriodicTableRoomProps {
  * same period/group layout as the flat picker (chemistry/periodicTableLayout),
  * just built from meshes instead of DOM nodes so it lives in the room.
  */
-export function PeriodicTableRoom({ center, rotation, selected, onSelectElement }: PeriodicTableRoomProps) {
+export function PeriodicTableRoom({ center, rotation, selected, dim, onSelectElement }: PeriodicTableRoomProps) {
   const isSelected = (symbol: string): boolean => (
     Array.isArray(selected) ? selected.includes(symbol) : symbol === selected
   );
@@ -120,6 +140,7 @@ export function PeriodicTableRoom({ center, rotation, selected, onSelectElement 
             x={colToX(col)}
             y={rowToY(row) + VERTICAL_CENTER_OFFSET}
             isSelected={isSelected(el.symbol)}
+            dimmed={dim?.(el.symbol)}
             onSelectElement={onSelectElement}
           />
         );

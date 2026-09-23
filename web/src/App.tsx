@@ -8,7 +8,8 @@ import { balanceEquation } from './chemistry/balance';
 import { checkBalance } from './chemistry/checkBalance';
 import { fetchMoleculeFromAtoms, MoleculeNotPossibleError } from './chemistry/api';
 import { cacheMolecule, getKnownMolecule, getMoleculeName } from './chemistry/moleculeSource';
-import type { ElementSymbol, Reaction } from './chemistry/types';
+import type { CategoryFilter } from './chemistry/elementFilter';
+import type { ElementSymbol, Reaction, ReactantSlot, TrayCard } from './chemistry/types';
 import { AppCanvas } from './three/AppCanvas';
 import { HubScene } from './three/HubScene';
 import { Ion } from './three/Ion';
@@ -18,10 +19,10 @@ import {
 } from './three/BohrAtom';
 import type { ChamberSnapshot, ReactionChamberHandle } from './three/ReactionChamber';
 import { ChamberRoom } from './three/ChamberRoom';
-import type { ReactantSlot, TrayCard } from './three/ChamberAtomTray';
 import { ElementsRoom } from './three/ElementsRoom';
 import { ELEMENTS_ION_DOCK } from './three/layout';
-import { answerIonQuestion, type ChatContext } from './ion/answers';
+import { IonChatBody } from './ion/ChatBody';
+import type { ChatContext } from './ion/answers';
 import { speak } from './ion/speech';
 
 type View = 'home' | 'chamber' | 'elements';
@@ -80,6 +81,9 @@ function useChamberController() {
   function handleReact(): void {
     chamberRef.current?.react();
   }
+
+  // ---- Left-wall periodic table category filter ----
+  const [elementCategory, setElementCategory] = useState<CategoryFilter>('all');
 
   // ---- Left-wall atom tray: build a reactant atom by atom ----
   const [activeBuildSlot, setActiveBuildSlot] = useState<ReactantSlot>('a');
@@ -165,12 +169,13 @@ function useChamberController() {
     check, ionWaveKey, chamberRef, handleChamberState, showSolution, handleReset, handleReact,
     activeBuildSlot, switchBuildSlot, trayCards, addTrayCard, removeTrayCard,
     trayBusy, trayError, liveGuess, confirmTray,
+    elementCategory, setElementCategory,
   };
 }
 
 type ChamberController = ReturnType<typeof useChamberController>;
 
-function ChamberSceneContent({ c, onIonClick }: { c: ChamberController; onIonClick: () => void }) {
+function ChamberSceneContent({ c }: { c: ChamberController }) {
   return (
     <ChamberRoom
       chamberRef={c.chamberRef}
@@ -178,6 +183,8 @@ function ChamberSceneContent({ c, onIonClick }: { c: ChamberController; onIonCli
       reactantB={c.reactantB}
       coeffs={c.coeffs}
       onChamberStateChange={c.handleChamberState}
+      reaction={c.reaction}
+      caption={c.caption}
       activeBuildSlot={c.activeBuildSlot}
       onSwitchSlot={c.switchBuildSlot}
       trayCards={c.trayCards}
@@ -187,8 +194,9 @@ function ChamberSceneContent({ c, onIonClick }: { c: ChamberController; onIonCli
       trayBusy={c.trayBusy}
       trayError={c.trayError}
       onConfirmTray={c.confirmTray}
+      elementCategory={c.elementCategory}
+      onElementCategoryChange={c.setElementCategory}
       ionWaveKey={c.ionWaveKey}
-      onIonClick={onIonClick}
     />
   );
 }
@@ -454,37 +462,12 @@ function ElementsOverlay({ e, onBack }: { e: ElementsController; onBack: () => v
 
 /* ---------------- Ion chat panel ---------------- */
 
-interface ChatMessage { from: 'ion' | 'user'; text: string; }
-
-function greetingFor(ctx: ChatContext): string {
-  if (ctx.kind === 'chamber') {
-    return ctx.reaction
-      ? `Ask me about ${toSubscript(ctx.reactantA)} + ${toSubscript(ctx.reactantB)} — bonds, oxidation states, balancing, the reaction type, anything.`
-      : "I don't have a reaction loaded for this pair, but ask away — I'll tell you what I can.";
-  }
-  if (ctx.kind === 'elements') return `Ask me about ${ctx.symbol} — its electron configuration, oxidation states, mass, or category.`;
-  return "Head into the chamber or the atom explorer and I'll have more to say.";
-}
-
+/** Click-to-open chat, used by the atom explorer (not part of the chamber's
+ * three-wall structure, so it keeps the toggle behavior rather than becoming
+ * a persistent panel). Mounting/unmounting IonChatBody on open/close is what
+ * gives it a fresh greeting each time it's reopened. The chamber's own Ion
+ * panel is three/ChamberIonPanel.tsx — wall-anchored, always visible. */
 function IonChatPanel({ open, onClose, context }: { open: boolean; onClose: () => void; context: ChatContext }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-
-  useEffect(() => {
-    if (open) setMessages([{ from: 'ion', text: greetingFor(context) }]);
-    // Only re-seed when the panel newly opens, not on every context change
-    // while an in-progress conversation is open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  function send(): void {
-    const question = input.trim();
-    if (!question) return;
-    const reply = answerIonQuestion(question, context);
-    setMessages((m) => [...m, { from: 'user', text: question }, { from: 'ion', text: reply }]);
-    setInput('');
-  }
-
   if (!open) return null;
   return (
     <div className="chat-panel">
@@ -493,22 +476,7 @@ function IonChatPanel({ open, onClose, context }: { open: boolean; onClose: () =
         <span>Ask Ion</span>
         <button type="button" className="chat-close" onClick={onClose} aria-label="Close chat">{'✕'}</button>
       </div>
-      <div className="chat-log">
-        {messages.map((m, i) => (
-          <div key={i} className={m.from === 'ion' ? 'chat-msg chat-ion' : 'chat-msg chat-user'}>{m.text}</div>
-        ))}
-      </div>
-      <form
-        className="chat-input-row"
-        onSubmit={(e) => { e.preventDefault(); send(); }}
-      >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about bonds, oxidation, balancing…"
-        />
-        <button type="submit" className="chip chip-accent">Send</button>
-      </form>
+      <IonChatBody context={context} />
     </div>
   );
 }
@@ -596,17 +564,13 @@ function App() {
     setView(v);
   }
 
-  const chatContext: ChatContext = view === 'chamber'
-    ? { kind: 'chamber', reactantA: chamber.reactantA, reactantB: chamber.reactantB, reaction: chamber.reaction }
-    : view === 'elements'
-      ? { kind: 'elements', symbol: elements.symbol }
-      : { kind: 'none' };
+  const elementsChatContext: ChatContext = { kind: 'elements', symbol: elements.symbol };
 
   return (
     <div id="app">
       <AppCanvas className="scene-layer">
         {view === 'home' && <HubScene ionWaveKey={hubWaveKey} />}
-        {view === 'chamber' && <ChamberSceneContent c={chamber} onIonClick={() => setChatOpen(true)} />}
+        {view === 'chamber' && <ChamberSceneContent c={chamber} />}
         {view === 'elements' && <ElementsSceneContent e={elements} onIonClick={() => setChatOpen(true)} />}
       </AppCanvas>
 
@@ -614,7 +578,9 @@ function App() {
       {view === 'chamber' && <ChamberOverlay c={chamber} onBack={goHome} />}
       {view === 'elements' && <ElementsOverlay e={elements} onBack={goHome} />}
 
-      <IonChatPanel open={chatOpen} onClose={() => setChatOpen(false)} context={chatContext} />
+      {view === 'elements' && (
+        <IonChatPanel open={chatOpen} onClose={() => setChatOpen(false)} context={elementsChatContext} />
+      )}
     </div>
   );
 }

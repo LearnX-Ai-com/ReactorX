@@ -35,3 +35,12 @@ export interface Reaction {
   name: string;
   note: string;
 }
+
+export type ReactantSlot = 'a' | 'b';
+
+/** One atom picked into the chamber's element picker, awaiting confirm into
+ * a reactant slot — see useChamberController (App.tsx). */
+export interface TrayCard {
+  id: number;
+  symbol: string;
+}

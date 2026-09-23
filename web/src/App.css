@@ -46,6 +46,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
     linear-gradient(to bottom, rgba(10, 15, 28, 0) 0, var(--panel-translucent) 24px),
     var(--panel-translucent);
   border-top: 1px solid var(--border);
+  box-shadow: 0 -1px 0 rgba(45, 212, 191, 0.18), 0 -18px 40px rgba(0, 0, 0, 0.3);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
   padding: 40px clamp(16px, 3vw, 28px) 16px;
   z-index: 2;
   backdrop-filter: blur(6px);
@@ -384,8 +387,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  padding: 6px 12px;
+  border-radius: 999px;
+  padding: 7px 14px;
   cursor: pointer;
   font-family: 'Inter', ui-sans-serif, sans-serif;
   font-weight: 600;
@@ -459,15 +462,25 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 
 .note-warn { color: var(--amber); }
 
-/* ---------------- chamber room: left-wall atom tray ---------------- */
+/* ---------------- chamber room: left-wall atom tray (floats on the wall via drei <Html>, not screen-docked) ---------------- */
 
-.atom-tray-panel {
-  width: 240px;
+.category-filter-panel {
+  width: max-content;
   background: var(--panel-translucent);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 12px 14px;
-  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  padding: 8px 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.06) inset, 0 12px 28px rgba(0, 0, 0, 0.3);
+}
+
+.atom-tray-panel {
+  width: 260px;
+  background: var(--panel-translucent);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 14px 16px;
+  backdrop-filter: blur(8px);
   font-family: 'Inter', ui-sans-serif, sans-serif;
   color: var(--text);
   pointer-events: none;
@@ -475,22 +488,85 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.06) inset, 0 18px 40px rgba(0, 0, 0, 0.35);
 }
 .atom-tray-panel .chip { pointer-events: auto; }
+.category-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 2px; }
+.category-btn {
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: 'Inter', ui-sans-serif, sans-serif;
+  cursor: pointer;
+}
+.category-btn-active { color: #052422; background: var(--accent); border-color: transparent; font-weight: 600; }
 .atom-tray-tabs { display: flex; gap: 6px; }
 .tray-tab {
   pointer-events: auto;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-dim);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 6px 8px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 11.5px;
   cursor: pointer;
+  text-align: left;
 }
 .tray-tab-active { color: var(--text); border-color: var(--accent); }
+.tray-tab-label {
+  font-family: 'Inter', ui-sans-serif, sans-serif;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.tray-tab-value {
+  font-family: 'Inter', ui-sans-serif, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.tray-tab-formula {
+  display: block;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-weight: 400;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.atom-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.atom-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 3px 2px 9px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+}
+.atom-chip button {
+  pointer-events: auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  font-size: 11px;
+}
+.atom-chip button:hover { background: var(--accent); color: #052422; }
 .tray-guess {
   margin: 0;
   font-size: 12.5px;
@@ -590,6 +666,50 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   font-size: 13px;
 }
 .chat-input-row input::placeholder { color: var(--text-faint); }
+
+/* ---------------- shared panel header (glass-panel restyle) ---------------- */
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+  margin-bottom: 8px;
+}
+.panel-header-icon { font-size: 15px; line-height: 1; }
+.panel-header-chat { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* ---------------- chamber right wall: reaction details + Ion chat, floating via drei <Html> ---------------- */
+
+.ion-float-panel {
+  width: 280px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-translucent);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 14px 16px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.06) inset, 0 18px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.reaction-details { margin-bottom: 4px; }
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 3px 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.detail-row span:first-child { color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Inter', ui-sans-serif, sans-serif; font-size: 10px; }
+.detail-note { margin: 4px 0 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.4; }
+.ion-float-panel .chat-log { padding: 8px 0; }
+.ion-float-panel .chat-input-row { padding: 8px 0 0; border-top: none; }
 
 /* ---------------- element plaque (museum signage, anchored in the room) ---------------- */
 
