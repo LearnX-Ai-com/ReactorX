@@ -1,0 +1,3793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReactorX — Chemistry you can walk into</title>
+<meta name="description" content="A browser-based 3D and WebXR chemistry lab: pick reactants, balance the equation, watch bonds break and form, and zoom from the whole reaction down to a single atom.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  /*
+    Deliberately single-theme: a dark instrument-panel / HUD look for a
+    "lab chamber" reads the same regardless of OS light/dark setting,
+    the way a cockpit display or oscilloscope does.
+  */
+  :root{
+    color-scheme: dark;
+    --bg:#0A0F1C;
+    --panel: rgba(17,25,42,0.86);
+    --panel-solid:#121A2C;
+    --border: rgba(148,168,204,0.16);
+    --border-strong: rgba(148,168,204,0.30);
+    --text:#E8EDF8;
+    --text-dim:#8C9AB8;
+    --text-faint:#5B6786;
+    --accent:#2DD4BF;
+    --accent-strong:#5EEAD4;
+    --accent-soft: rgba(45,212,191,0.14);
+    --amber:#F5A524;
+    --amber-soft: rgba(245,165,36,0.14);
+    --font-display:'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-body:'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+  html, body{ height:100%; margin:0; background:var(--bg); }
+  body{ font-family:var(--font-body); color:var(--text); overflow:hidden; }
+  * { box-sizing: border-box; }
+  /* Author display rules (.hud grid, .btn inline-flex, …) beat the UA's
+     [hidden]{display:none}, so without this the hidden attribute is ignored. */
+  [hidden]{ display:none !important; }
+
+  #app{ position:relative; height:100%; width:100%; overflow:hidden; display:flex; flex-direction:column; }
+  #viewport{ position:relative; flex:1 1 auto; min-height:0; overflow:hidden; }
+  #scene{ position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:grab; }
+
+  .topbar{
+    position:absolute; top:0; left:0; right:0; z-index:2;
+    display:flex; align-items:flex-start; justify-content:space-between;
+    gap:12px; padding:18px clamp(16px,3vw,28px) 40px;
+    background:linear-gradient(to bottom, rgba(8,12,22,0.92), rgba(8,12,22,0));
+    pointer-events:none;
+  }
+  .topbar > *{ pointer-events:auto; }
+  .eyebrow{
+    display:block; font-family:var(--font-mono); font-size:11px; letter-spacing:0.14em;
+    color:var(--accent); text-transform:uppercase; margin-bottom:4px;
+  }
+  .tagline{ display:block; margin-top:2px; font-size:12.5px; color:var(--text-dim); }
+  @media (max-width:520px){ .tagline{ display:none; } }
+  .brand h1{
+    margin:0; font-family:var(--font-display); font-weight:700;
+    font-size:clamp(20px,4vw,28px); letter-spacing:-0.01em;
+  }
+  .xr-controls{ display:flex; align-items:center; gap:10px; }
+  .vr-status{ font-size:12px; color:var(--text-faint); max-width:220px; text-align:right; }
+
+  .btn{
+    font-family:var(--font-body); font-weight:600; font-size:14px;
+    border-radius:10px; padding:10px 16px; border:1px solid var(--border-strong);
+    cursor:pointer; transition:transform .15s ease, filter .15s ease, opacity .15s ease;
+    display:inline-flex; align-items:center; gap:8px; white-space:nowrap;
+  }
+  .btn:active{ transform: scale(0.97); }
+  .btn:disabled{ opacity:0.35; cursor:not-allowed; transform:none; }
+  .btn-ghost{ background:rgba(255,255,255,0.04); color:var(--text); }
+  .btn-ghost:hover:not(:disabled){ background:rgba(255,255,255,0.09); }
+  .btn-amber{ background:var(--amber); color:#241505; border-color:transparent; }
+  .btn-amber:hover:not(:disabled){ filter:brightness(1.08); }
+  .btn-accent{ background:var(--accent); color:#052422; border-color:transparent; }
+  .btn-accent:hover:not(:disabled){ filter:brightness(1.08); }
+
+  .hud{
+    position:relative; z-index:2; flex:0 0 auto;
+    width:100%;
+    padding:14px clamp(16px,3vw,32px) 16px;
+    background:var(--panel-solid);
+    border-top:1px solid var(--border);
+    display:grid;
+    grid-template-columns: minmax(240px,340px) 1fr minmax(220px,300px);
+    column-gap:28px; row-gap:10px;
+    align-items:center;
+  }
+  .hud-col-left{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .hud-col-center{ display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .hud-col-right{ display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
+  .hud-row{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+
+  @media (max-width: 860px){
+    .hud{ grid-template-columns: 1fr; }
+    .hud-col-right{ justify-content:flex-start; }
+  }
+
+  .field{ display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--text-dim); flex:1 1 130px; }
+  .field select{
+    font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--text);
+    background:var(--panel-solid); border:1px solid var(--border-strong); border-radius:8px;
+    padding:8px 10px; outline:none; cursor:pointer;
+  }
+  .field select:focus{ border-color:var(--accent); }
+  .plus{ font-family:var(--font-mono); color:var(--text-faint); font-size:18px; padding-top:14px; }
+
+  .equation-row{ justify-content:space-between; }
+  .equation{
+    font-family:var(--font-mono); font-size:clamp(16px,2.6vw,22px); font-weight:700;
+    letter-spacing:0.01em; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px;
+  }
+  .equation .coef{ color:var(--amber); margin-right:1px; transition:color .2s ease; }
+  .equation .coef.hidden-one{ display:none; }
+  .equation .coef.pop{ animation:pop .45s ease; }
+  .equation .balanced .coef{ color:var(--accent-strong); }
+  .equation .sym{ color:var(--text-faint); margin:0 8px; }
+  .equation .sym.arrow{ color:var(--text-dim); }
+  .equation.pulsing .sym.arrow{ animation:pulseArrow 1.1s ease-in-out infinite; }
+  @keyframes pop{ 0%{ transform:scale(1.6); } 100%{ transform:scale(1); } }
+  @keyframes pulseArrow{ 0%,100%{ text-shadow:0 0 0 transparent; } 50%{ text-shadow:0 0 14px var(--accent); color:var(--accent); } }
+
+  .badge{
+    font-family:var(--font-mono); font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+    padding:5px 10px; border-radius:999px; white-space:nowrap;
+  }
+  .badge-amber{ background:var(--amber-soft); color:var(--amber); }
+  .badge-accent{ background:var(--accent-soft); color:var(--accent-strong); }
+
+  .meta-row{ gap:10px; }
+  .chip{
+    font-family:var(--font-mono); font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--text-dim); border:1px solid var(--border-strong); border-radius:6px; padding:3px 8px;
+  }
+  .note{ margin:0; font-size:13px; color:var(--text-dim); line-height:1.4; flex:1 1 240px; }
+
+  .legend{
+    grid-column: 1 / -1;
+    display:flex; flex-wrap:wrap; gap:16px; font-size:11px; color:var(--text-faint);
+    border-top:1px solid var(--border); padding-top:10px; margin-top:2px;
+  }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .swatch{ width:18px; height:2px; display:inline-block; }
+  .bond-covalent{ background:#AEB9D4; }
+  .bond-ionic{ background:var(--amber); height:3px; }
+  .drag-hint{ margin-left:auto; }
+
+  .molecule-card{
+    position:absolute; left:clamp(16px,3vw,28px); top:104px; z-index:3;
+    width:min(280px, calc(100% - 32px));
+    background:var(--panel); backdrop-filter:blur(14px);
+    border:1px solid var(--border-strong); border-radius:14px;
+    padding:16px; display:flex; flex-direction:column; gap:10px;
+    opacity:0; transform:translateY(10px) scale(0.98); pointer-events:none;
+    transition:opacity .25s ease, transform .25s ease;
+  }
+  .molecule-card.open{ opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
+  .molecule-card-close{
+    align-self:flex-start; background:none; border:none; color:var(--accent-strong);
+    font-family:var(--font-mono); font-size:12px; letter-spacing:0.04em; cursor:pointer; padding:0;
+  }
+  .molecule-card-close:hover{ text-decoration:underline; }
+  .molecule-card-formula{ font-family:var(--font-display); font-weight:700; font-size:28px; letter-spacing:-0.01em; }
+  .molecule-card-name{ font-size:13px; color:var(--text-dim); margin-top:-8px; }
+  .molecule-card-chips{ display:flex; gap:8px; flex-wrap:wrap; }
+  .molecule-card-stat{
+    display:flex; justify-content:space-between; align-items:baseline;
+    font-size:13px; color:var(--text-dim); border-top:1px solid var(--border); padding-top:8px;
+  }
+  .molecule-card-stat strong{ font-family:var(--font-mono); color:var(--text); font-size:14px; }
+  .molecule-card-fact{ margin:0; font-size:12.5px; line-height:1.45; color:var(--text-dim); }
+  .molecule-card-hint{ margin:0; font-size:11px; color:var(--text-faint); font-style:italic; }
+  .mc-learn-more{ align-self:flex-start; margin-top:2px; }
+
+  .detail-view{
+    position:absolute; inset:0; z-index:20;
+    background:var(--bg);
+    display:flex; flex-direction:column;
+    opacity:0; pointer-events:none; transform:translateY(12px);
+    transition:opacity .28s ease, transform .28s ease;
+  }
+  .detail-view.open{ opacity:1; pointer-events:auto; transform:translateY(0); }
+  .detail-header{
+    display:flex; align-items:center; gap:18px; flex:0 0 auto; z-index:1;
+    padding:calc(16px + env(safe-area-inset-top,0px)) clamp(16px,3vw,28px) 16px;
+    border-bottom:1px solid var(--border);
+  }
+  .detail-title{ display:flex; flex-direction:column; gap:2px; }
+  .detail-title h2{ margin:0; font-family:var(--font-display); font-weight:700; font-size:clamp(22px,4vw,30px); }
+
+  .detail-viewport{ position:relative; flex:1 1 auto; min-height:0; overflow:hidden; }
+  #detailCanvas{ position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; }
+
+  .atom-tabs{
+    position:absolute; top:16px; left:50%; transform:translateX(-50%); z-index:2;
+    display:flex; gap:6px; background:var(--panel); backdrop-filter:blur(14px);
+    border:1px solid var(--border-strong); border-radius:999px; padding:4px;
+  }
+  .atom-tab{
+    font-family:var(--font-mono); font-weight:600; font-size:13px; letter-spacing:0.02em;
+    padding:7px 16px; border-radius:999px; border:none; background:transparent;
+    color:var(--text-dim); cursor:pointer;
+  }
+  .atom-tab.active{ background:var(--accent); color:#052422; }
+
+  .particle-counter{
+    position:absolute; top:64px; left:50%; transform:translateX(-50%); z-index:2;
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;
+    font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); text-align:center;
+    background:var(--panel); backdrop-filter:blur(14px); border:1px solid var(--border);
+    border-radius:999px; padding:6px 14px;
+  }
+  .particle-counter b{ color:var(--text); font-weight:600; }
+  .particle-counter .dot-p{ color:var(--amber); } .particle-counter .dot-n{ color:#AEB9D4; } .particle-counter .dot-e{ color:var(--accent-strong); }
+  .molecule-locator{
+    position:absolute; top:56px; right:16px; z-index:2;
+    width:112px; height:112px; background:var(--panel-solid); backdrop-filter:blur(14px);
+    border:1px solid var(--border-strong); border-radius:12px; overflow:hidden;
+  }
+  .molecule-locator canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; cursor:pointer; }
+  .molecule-locator-label{
+    position:absolute; bottom:0; left:0; right:0; z-index:1; text-align:center;
+    font-family:var(--font-mono); font-size:9.5px; color:var(--text-dim); padding:3px 0 4px;
+    background:linear-gradient(to top, rgba(5,8,16,0.85), transparent);
+  }
+  .accuracy-info-btn{
+    position:absolute; top:16px; right:16px; z-index:2;
+    width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    background:var(--panel); backdrop-filter:blur(14px); border:1px solid var(--border-strong);
+    color:var(--text-dim); font-family:var(--font-display); font-size:14px; font-weight:700; cursor:pointer;
+  }
+  .accuracy-info-btn:hover{ color:var(--text); }
+  .accuracy-popover{
+    position:absolute; top:50px; right:16px; z-index:2; width:min(230px, calc(100% - 32px));
+    background:var(--panel); backdrop-filter:blur(14px); border:1px solid var(--border-strong);
+    border-radius:10px; padding:11px 13px; font-size:11px; line-height:1.5; color:var(--text-dim); text-align:left;
+    opacity:0; transform:translateY(-6px); pointer-events:none;
+    transition:opacity .18s ease, transform .18s ease;
+  }
+  .accuracy-popover.open{ opacity:1; transform:translateY(0); pointer-events:auto; }
+
+  .atom-info{
+    position:absolute; left:clamp(14px,3vw,26px); bottom:clamp(14px,3vw,26px); z-index:2;
+    width:min(300px, calc(100% - 28px)); max-height:calc(100% - 100px); overflow-y:auto;
+    background:var(--panel); backdrop-filter:blur(14px);
+    border:1px solid var(--border-strong); border-radius:14px;
+    padding:16px; display:flex; flex-direction:column; gap:10px;
+  }
+  .atom-info-head{ display:flex; align-items:baseline; gap:10px; }
+  .atom-symbol{ font-family:var(--font-display); font-weight:700; font-size:28px; }
+  .atom-name{ font-size:13px; color:var(--text-dim); }
+  .atom-stats{ margin:0; display:grid; grid-template-columns:1fr auto; gap:4px 10px; font-size:12.5px; }
+  .atom-stats dt{ color:var(--text-dim); }
+  .atom-stats dd{ margin:0; font-family:var(--font-mono); color:var(--text); text-align:right; }
+  .detail-molecule-context{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    border-top:1px solid var(--border); padding-top:10px;
+  }
+  .detail-mini-stat{ display:flex; flex-direction:column; gap:1px; margin-left:auto; text-align:right; }
+  .detail-mini-stat span{ font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.06em; }
+  .detail-mini-stat strong{ font-family:var(--font-mono); font-size:13px; }
+  .detail-fact{ margin:0; font-size:12.5px; line-height:1.5; color:var(--text-dim); }
+
+  .particle-back{
+    align-self:flex-start; background:none; border:none; cursor:pointer; padding:0;
+    font-family:var(--font-mono); font-size:11.5px; color:var(--accent-strong); letter-spacing:0.02em;
+  }
+  .particle-back:hover{ text-decoration:underline; }
+  .particle-title-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .particle-title{ font-family:var(--font-display); font-weight:700; font-size:20px; }
+  .particle-charge{
+    font-family:var(--font-mono); font-weight:700; font-size:13px; padding:4px 10px; border-radius:999px; white-space:nowrap;
+  }
+  .particle-charge.charge-proton{ background:var(--amber-soft); color:var(--amber); }
+  .particle-charge.charge-neutron{ background:rgba(124,138,174,0.16); color:#AEB9D4; }
+  .particle-charge.charge-electron{ background:var(--accent-soft); color:var(--accent-strong); }
+  .particle-body{ margin:0; font-size:13px; line-height:1.55; color:var(--text-dim); }
+  .explore-inside-btn{
+    align-self:flex-start; font-family:var(--font-body); font-weight:600; font-size:13px;
+    padding:9px 14px; border-radius:9px; border:1px solid rgba(176,114,255,0.5);
+    background:rgba(176,114,255,0.12); color:#E7D9FF; cursor:pointer;
+  }
+  .explore-inside-btn:hover{ background:rgba(176,114,255,0.22); }
+  .quark-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--text-dim); }
+  .quark-legend span{ display:inline-flex; align-items:center; gap:5px; }
+  .quark-legend i{ width:9px; height:9px; border-radius:50%; display:inline-block; }
+
+  .zoom-controls{
+    position:absolute; right:clamp(14px,3vw,26px); top:50%; transform:translateY(-50%);
+    z-index:2; display:flex; flex-direction:column;
+    background:var(--panel); backdrop-filter:blur(14px);
+    border:1px solid var(--border-strong); border-radius:10px; overflow:hidden;
+  }
+  .zoom-controls button{
+    width:38px; height:38px; border:none; background:transparent; color:var(--text);
+    font-family:var(--font-mono); font-size:19px; line-height:1; cursor:pointer;
+  }
+  .zoom-controls button:hover{ background:rgba(255,255,255,0.09); }
+  .zoom-controls button:active{ background:rgba(255,255,255,0.15); }
+  .zoom-controls button + button{ border-top:1px solid var(--border); }
+
+  @media (max-width: 700px){
+    .molecule-card{
+      top:auto; bottom:12px; left:12px; right:12px; width:auto; max-height:46%; overflow:auto;
+    }
+  }
+  @media (max-width: 480px){
+    .drag-hint{ margin-left:0; width:100%; }
+    .equation-row{ flex-direction:column; align-items:flex-start; }
+  }
+
+  /* ---- Ion, the lab assistant ---- */
+  #app{ --ion-panel-w:min(340px, 46vw); --ion-gutter:clamp(14px,3vw,26px); }
+  .ion-btn{
+    position:absolute; right:var(--ion-gutter); bottom:var(--ion-bottom,20px); z-index:30;
+    display:inline-flex; align-items:center; gap:8px; padding:11px 16px;
+    border-radius:999px; border:1px solid var(--accent); background:var(--panel-solid);
+    color:var(--accent-strong); font-family:var(--font-body); font-weight:600; font-size:13.5px; cursor:pointer;
+    box-shadow:0 8px 24px rgba(0,0,0,0.4);
+    transition:transform .15s ease, opacity .2s ease, bottom .2s ease, filter .15s ease;
+  }
+  .ion-btn:hover{ filter:brightness(1.25); transform:translateY(-2px); }
+  .ion-btn-dot{ width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  #app.ion-open .ion-btn{ opacity:0; pointer-events:none; transform:scale(0.9); }
+
+  .ion-panel{
+    position:absolute; right:var(--ion-gutter); bottom:var(--ion-bottom,20px); z-index:31;
+    width:var(--ion-panel-w); height:min(560px, calc(100% - 96px - var(--ion-bottom,20px))); min-height:300px;
+    display:flex; flex-direction:column;
+    background:var(--panel); backdrop-filter:blur(14px);
+    border:1px solid var(--border-strong); border-radius:14px; overflow:hidden;
+    opacity:0; visibility:hidden; pointer-events:none; transform:translateY(14px) scale(0.98); transform-origin:bottom right;
+    transition:opacity .22s ease, transform .22s ease, visibility 0s linear .22s;
+  }
+  .ion-panel.open{
+    opacity:1; visibility:visible; pointer-events:auto; transform:none;
+    transition:opacity .22s ease, transform .22s ease, visibility 0s;
+  }
+  .ion-header{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; border-bottom:1px solid var(--border); }
+  .ion-title{ display:flex; flex-direction:column; gap:1px; }
+  .ion-title strong{ font-family:var(--font-display); font-size:15px; }
+  .ion-title span{ font-size:11.5px; color:var(--text-dim); }
+  .ion-close{
+    width:30px; height:30px; border-radius:8px; border:none; background:transparent;
+    color:var(--text-dim); font-size:15px; cursor:pointer;
+  }
+  .ion-close:hover{ background:rgba(255,255,255,0.09); color:var(--text); }
+  .ion-messages{ flex:1 1 auto; min-height:120px; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+  .ion-msg{
+    max-width:90%; padding:9px 12px; border-radius:12px; font-size:13px; line-height:1.5;
+    overflow-wrap:anywhere; animation:ion-pop .2s ease;
+  }
+  .ion-msg-bot{ align-self:flex-start; background:rgba(255,255,255,0.05); border:1px solid var(--border); border-bottom-left-radius:4px; }
+  .ion-msg-user{ align-self:flex-end; background:var(--accent-soft); border:1px solid rgba(45,212,191,0.35); border-bottom-right-radius:4px; }
+  .ion-typing{ display:inline-flex; gap:4px; padding:13px 14px; }
+  .ion-typing i{ width:6px; height:6px; border-radius:50%; background:var(--text-dim); animation:ion-bounce 1s infinite ease-in-out; }
+  .ion-typing i:nth-child(2){ animation-delay:.15s; }
+  .ion-typing i:nth-child(3){ animation-delay:.3s; }
+  .ion-context{
+    padding:8px 14px 0; border-top:1px solid var(--border);
+    font-family:var(--font-mono); font-size:11px; color:var(--text-dim); overflow-wrap:anywhere;
+  }
+  .ion-chips{ display:flex; flex-wrap:wrap; gap:6px; padding:8px 14px 0; }
+  .ion-chip{
+    font-family:var(--font-body); font-size:12px; line-height:1.3; text-align:left; cursor:pointer;
+    padding:6px 10px; border-radius:999px; border:1px solid var(--border-strong);
+    background:rgba(255,255,255,0.04); color:var(--text);
+  }
+  .ion-chip:hover{ border-color:var(--accent); color:var(--accent-strong); }
+  .ion-form{ display:flex; gap:8px; padding:10px 14px 6px; }
+  .ion-input{
+    flex:1 1 auto; min-width:0; padding:9px 12px; border-radius:9px;
+    border:1px solid var(--border-strong); background:rgba(255,255,255,0.05);
+    color:var(--text); font-family:var(--font-body); font-size:13px;
+  }
+  .ion-input:focus{ outline:none; border-color:var(--accent); }
+  .ion-footer{ margin:0; padding:0 14px 10px; font-size:10.5px; color:var(--text-faint); }
+  @keyframes ion-pop{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+  @keyframes ion-bounce{ 0%,60%,100%{ transform:translateY(0); opacity:.5; } 30%{ transform:translateY(-4px); opacity:1; } }
+  @media (prefers-reduced-motion: reduce){
+    .ion-msg, .ion-typing i{ animation:none; }
+    .ion-panel, .ion-btn{ transition:none; }
+  }
+
+  /* Wide or landscape (desktops, tablets, and phones held sideways): the panel floats over the
+     right edge, so slide the controls that live there out of its way rather than hiding them. */
+  @media (min-width: 701px), (orientation: landscape){
+    .zoom-controls, .molecule-locator, .accuracy-info-btn, .accuracy-popover{ transition:right .22s ease; }
+    #app.ion-open .zoom-controls,
+    #app.ion-open .molecule-locator,
+    #app.ion-open .accuracy-info-btn,
+    #app.ion-open .accuracy-popover{ right:calc(var(--ion-panel-w) + var(--ion-gutter) + 12px); }
+    #app.ion-shrink #scene{ width:calc(100% - var(--ion-panel-w) - var(--ion-gutter) - 12px); }
+  }
+  /* Short screens (a phone on its side): use the full height for the panel and keep the
+     suggestion chips on one scrolling row so the message list still has room. */
+  @media (max-height: 520px){
+    .ion-panel{ top:12px; bottom:var(--ion-bottom,20px); height:auto; min-height:0; }
+    .ion-title span{ display:none; }
+    .ion-header{ padding:8px 12px; }
+    .ion-chips{ flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }
+    .ion-chip{ white-space:nowrap; flex:0 0 auto; }
+    .ion-form{ padding-top:8px; }
+    .ion-footer{ padding-bottom:6px; }
+  }
+  /* Narrow screens: the molecule and atom info cards dock along the bottom, so the button moves to
+     the right edge (under the Show-panel button, clear of the zoom controls). In the detail view it
+     sits in the header's empty right side, above the locator thumbnail and the info card. */
+  @media (max-width: 700px){
+    .ion-btn{ top:62px; bottom:auto; padding:10px 14px; }
+    #app.detail-open .ion-btn{ top:calc(17px + env(safe-area-inset-top,0px)); }
+  }
+  /* Narrow AND portrait (only a small desktop window, since phones are held sideways): bottom sheet. */
+  @media (max-width: 700px) and (orientation: portrait){
+    .ion-panel{
+      left:0; right:0; bottom:0; width:auto; height:auto; min-height:0; max-height:60%;
+      border-radius:14px 14px 0 0; border-bottom:none; transform-origin:bottom center;
+    }
+    .ion-input{ font-size:16px; }
+  }
+
+  /* ReactorX is built for landscape on phones. In portrait on a touch phone, ask the
+     student to turn the device instead of showing a cramped, unusable lab. */
+  .rotate-notice{ display:none; }
+  @media (orientation: portrait) and (max-width: 700px) and (hover: none) and (pointer: coarse){
+    .rotate-notice{
+      position:fixed; inset:0; z-index:1000; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:14px; padding:24px; text-align:center;
+      background:var(--bg);
+    }
+    .rotate-notice svg{ width:72px; height:72px; color:var(--accent-strong); animation:rotate-hint 2.4s ease-in-out infinite; }
+    .rotate-notice h2{ margin:0; font-family:var(--font-display); font-size:22px; }
+    .rotate-notice p{ margin:0; max-width:280px; font-size:14px; line-height:1.5; color:var(--text-dim); }
+  }
+  @keyframes rotate-hint{ 0%,15%{ transform:rotate(0deg); } 55%,100%{ transform:rotate(-90deg); } }
+  @media (prefers-reduced-motion: reduce){ .rotate-notice svg{ animation:none; transform:rotate(-90deg); } }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="viewport">
+    <canvas id="scene"></canvas>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="eyebrow">WebXR Chemistry Lab</span>
+        <h1>ReactorX</h1>
+        <span class="tagline">Chemistry you can walk into.</span>
+      </div>
+      <div class="xr-controls">
+        <span id="vrStatus" class="vr-status" hidden></span>
+        <button id="hudToggleBtn" class="btn btn-ghost" type="button">⌄ Hide panel</button>
+        <button id="vrBtn" class="btn btn-ghost" hidden type="button">⛶ Enter VR</button>
+      </div>
+    </header>
+
+    <div class="zoom-controls" id="zoomControls">
+      <button id="zoomInBtn" type="button" aria-label="Zoom in">+</button>
+      <button id="zoomOutBtn" type="button" aria-label="Zoom out">−</button>
+      <button id="centerViewBtn" type="button" aria-label="Center view" title="Center view (or double-click empty space)">⌖</button>
+    </div>
+
+    <div class="molecule-card" id="moleculeCard"></div>
+  </div>
+
+  <div class="detail-view" id="detailView" aria-hidden="true">
+    <header class="detail-header">
+      <button id="detailBackBtn" class="btn btn-ghost" type="button">← Back</button>
+      <div class="detail-title">
+        <span class="eyebrow" id="detailEyebrow">ELEMENT</span>
+        <h2 id="detailFormula"></h2>
+      </div>
+    </header>
+
+    <div class="detail-viewport" id="detailViewport">
+      <canvas id="detailCanvas"></canvas>
+
+      <div class="atom-tabs" id="atomTabs"></div>
+      <div class="particle-counter" id="particleCounter"></div>
+      <button class="accuracy-info-btn" id="accuracyInfoBtn" type="button" aria-label="About this model">i</button>
+      <div class="accuracy-popover" id="accuracyPopover">Simplified model — electrons don't orbit like tiny planets; this represents where they're likely to be found.</div>
+
+      <div class="molecule-locator" id="moleculeLocator" hidden>
+        <canvas id="moleculeLocatorCanvas"></canvas>
+        <div class="molecule-locator-label" id="moleculeLocatorLabel"></div>
+      </div>
+
+      <div class="atom-info" id="atomInfo"></div>
+    </div>
+  </div>
+
+  <div class="hud" id="hud">
+    <div class="hud-col hud-col-left">
+      <label class="field">
+        <span>Reactant A</span>
+        <select id="selA"></select>
+      </label>
+      <span class="plus">+</span>
+      <label class="field">
+        <span>Reactant B</span>
+        <select id="selB"></select>
+      </label>
+    </div>
+
+    <div class="hud-col hud-col-center">
+      <div class="hud-row equation-row">
+        <div class="equation" id="equation" aria-live="polite"></div>
+        <span class="badge badge-amber" id="balanceBadge">unbalanced</span>
+      </div>
+      <div class="hud-row meta-row">
+        <span class="chip" id="reactionType">—</span>
+        <p class="note" id="reactionNote">Pick two reactants to begin.</p>
+      </div>
+    </div>
+
+    <div class="hud-col hud-col-right">
+      <button id="balanceBtn" class="btn btn-amber" type="button">⚖ Balance equation</button>
+      <button id="reactBtn" class="btn btn-accent" type="button" disabled>⚗ React</button>
+      <button id="resetBtn" class="btn btn-ghost" type="button" hidden>↺ Reset</button>
+    </div>
+
+    <div class="legend">
+      <span><i class="swatch bond-covalent"></i> covalent bond — shared electrons</span>
+      <span><i class="swatch bond-ionic"></i> ionic attraction — transferred electrons</span>
+      <span class="drag-hint">Click a molecule for a closer look · drag to rotate · Shift-drag or two-finger drag to move · scroll to zoom · double-click to recenter</span>
+    </div>
+  </div>
+
+  <button id="ionBtn" class="ion-btn" type="button" aria-controls="ionPanel" aria-expanded="false">
+    <span class="ion-btn-dot" aria-hidden="true"></span>Ask Ion
+  </button>
+  <aside id="ionPanel" class="ion-panel" aria-label="Ion, your lab assistant" aria-hidden="true">
+    <header class="ion-header">
+      <div class="ion-title">
+        <strong>Ion · your lab assistant</strong>
+        <span>Answers from the chemistry on screen</span>
+      </div>
+      <button id="ionClose" class="ion-close" type="button" aria-label="Close assistant">✕</button>
+    </header>
+    <div id="ionMessages" class="ion-messages" role="log" aria-live="polite"></div>
+    <div id="ionContext" class="ion-context"></div>
+    <div id="ionChips" class="ion-chips"></div>
+    <form id="ionForm" class="ion-form" autocomplete="off">
+      <input id="ionInput" class="ion-input" type="text" maxlength="200" placeholder="Ask about what you see…" aria-label="Ask Ion a question">
+      <button id="ionSend" class="btn btn-accent" type="submit">Send</button>
+    </form>
+    <p class="ion-footer">AI can make mistakes. Check with your teacher.</p>
+  </aside>
+</div>
+
+<div class="rotate-notice" id="rotateNotice" role="alert">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.5h2"/>
+  </svg>
+  <h2>Please rotate your phone</h2>
+  <p>ReactorX works best in landscape. Turn your device sideways to step into the lab.</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------------- Chemistry data ---------------- */
+
+  // number = protons/atomic number, neutrons = count in the most abundant isotope,
+  // shells = simplified Bohr-model electron distribution (K, L, M, N...).
+  // en = Pauling-scale electronegativity, used to explain bond type on click.
+  // valence = electrons in the outermost shell (for Fe: the 4s pair only — see
+  // the note below), oxidation = common oxidation states, config = ground-state
+  // electron configuration in subshell notation.
+  const ELEMENTS = {
+    H:  { color:0xF1F5F9, r:0.32, mass:1.008,  number:1,  neutrons:0,  shells:[1],       en:2.20, valence:1, oxidation:[1,-1], config:'1s¹' },
+    O:  { color:0xF0574B, r:0.55, mass:15.999, number:8,  neutrons:8,  shells:[2,6],     en:3.44, valence:6, oxidation:[-2], config:'1s² 2s² 2p⁴' },
+    N:  { color:0x3B82F6, r:0.55, mass:14.007, number:7,  neutrons:7,  shells:[2,5],     en:3.04, valence:5, oxidation:[-3,5], config:'1s² 2s² 2p³' },
+    C:  { color:0x4B5567, r:0.58, mass:12.011, number:6,  neutrons:6,  shells:[2,4],     en:2.55, valence:4, oxidation:[4,-4], config:'1s² 2s² 2p²' },
+    Cl: { color:0x8FE04E, r:0.75, mass:35.45,  number:17, neutrons:18, shells:[2,8,7],   en:3.16, valence:7, oxidation:[-1,7], config:'1s² 2s² 2p⁶ 3s² 3p⁵' },
+    Na: { color:0xB072FF, r:0.85, mass:22.990, number:11, neutrons:12, shells:[2,8,1],   en:0.93, valence:1, oxidation:[1], config:'1s² 2s² 2p⁶ 3s¹' },
+    // Fe's last shell (the flat Bohr count) is only 2 (4s^2), but the 3rd
+    // shell's 14 also includes 3d^6 — transition metals draw on those d
+    // electrons for bonding too, which is why iron reaches Fe3+ (2 from 4s,
+    // 1 from 3d) rather than stopping at Fe2+. bondShellDepth tells the
+    // simplified bond-story view (below) to show the outer TWO shells
+    // instead of just one, so both real rings are visible and the 3rd
+    // electron visibly comes from the inner one, not a fabricated combined
+    // count on a single ring.
+    Fe: { color:0xC97A3D, r:0.72, mass:55.845, number:26, neutrons:30, shells:[2,8,14,2],en:1.83, valence:2, oxidation:[2,3], config:'1s² 2s² 2p⁶ 3s² 3p⁶ 3d⁶ 4s²', bondShellDepth:2 },
+    Mg: { color:0x7FE0A8, r:0.75, mass:24.305, number:12, neutrons:12, shells:[2,8,2],   en:1.31, valence:2, oxidation:[2], config:'1s² 2s² 2p⁶ 3s²' },
+  };
+
+  const ATOMIC_NAMES = {
+    H:'Hydrogen', O:'Oxygen', N:'Nitrogen', C:'Carbon',
+    Cl:'Chlorine', Na:'Sodium', Fe:'Iron', Mg:'Magnesium',
+  };
+
+  const ELEMENT_NAMES = {
+    H2:'Hydrogen', O2:'Oxygen', N2:'Nitrogen', CH4:'Methane',
+    Na:'Sodium', Cl2:'Chlorine', Fe:'Iron', Mg:'Magnesium', C:'Carbon',
+  };
+
+  const MOLECULE_INFO = {
+    H2:  { name:'Hydrogen gas', category:'Element', fact:'The lightest and most abundant element in the universe.' },
+    O2:  { name:'Oxygen gas', category:'Element', fact:'Makes up about 21% of Earth’s atmosphere and powers cellular respiration.' },
+    N2:  { name:'Nitrogen gas', category:'Element', fact:'About 78% of the air you breathe, but too inert to use directly — plants need it fixed first.' },
+    Cl2: { name:'Chlorine gas', category:'Element', fact:'A toxic yellow-green gas, used in small amounts to disinfect drinking water.' },
+    Na:  { name:'Sodium', category:'Element', fact:'A soft metal that reacts violently with water — never found free in nature.' },
+    Fe:  { name:'Iron', category:'Element', fact:'The most common element on Earth by mass, concentrated in its molten core.' },
+    Mg:  { name:'Magnesium', category:'Element', fact:'Burns with a blinding white light — once used in photographic flashbulbs.' },
+    C:   { name:'Carbon', category:'Element', fact:'The backbone of every known living organism and of organic chemistry itself.' },
+    H2O: { name:'Water', category:'Compound', fact:'The only common substance found naturally in solid, liquid, and gas form on Earth.' },
+    CH4: { name:'Methane', category:'Compound', fact:'The simplest hydrocarbon and the main component of natural gas.' },
+    CO2: { name:'Carbon dioxide', category:'Compound', fact:'A greenhouse gas produced whenever carbon-based fuel burns or cells respire.' },
+    NH3: { name:'Ammonia', category:'Compound', fact:'A pungent gas that is the starting point for most nitrogen fertilizer on Earth.' },
+    HCl: { name:'Hydrogen chloride', category:'Compound', fact:'Dissolves in water to form hydrochloric acid — the acid in your stomach.' },
+    NaCl:{ name:'Sodium chloride (table salt)', category:'Compound', fact:'An ionic crystal lattice, not discrete molecules like a covalent compound.' },
+    MgO: { name:'Magnesium oxide', category:'Compound', fact:'A white ionic solid used in antacids and in heat-resistant refractory brick.' },
+    Fe2O3:{ name:'Iron(III) oxide (rust)', category:'Compound', fact:'The reddish-brown compound that forms as iron slowly oxidizes in air.' },
+    Na2O:{ name:'Sodium oxide', category:'Compound', fact:'Forms almost instantly on the shiny surface of freshly cut sodium metal exposed to air.' },
+    FeCl3:{ name:'Iron(III) chloride', category:'Compound', fact:'A yellow-brown solid — iron wool will burst into flame on contact with chlorine gas.' },
+    MgCl2:{ name:'Magnesium chloride', category:'Compound', fact:'Extracted from seawater and used to de-ice roads and produce magnesium metal.' },
+  };
+
+  // Simplified molecular geometry: atoms with local positions, bonds as
+  // [atomIndexA, atomIndexB, 'covalent' | 'ionic'].
+  const MOLECULES = {
+    // Covalent bonds carry a 4th element too: bond order (shared electron
+    // pairs) — O=O is a double bond and N#N a triple bond in reality, not the
+    // single shared pair a plain 'covalent' entry would imply.
+    H2:  { atoms:[{el:'H',pos:[-0.37,0,0]},{el:'H',pos:[0.37,0,0]}], bonds:[[0,1,'covalent',1]] },
+    O2:  { atoms:[{el:'O',pos:[-0.6,0,0]},{el:'O',pos:[0.6,0,0]}], bonds:[[0,1,'covalent',2]] },
+    N2:  { atoms:[{el:'N',pos:[-0.55,0,0]},{el:'N',pos:[0.55,0,0]}], bonds:[[0,1,'covalent',3]] },
+    Cl2: { atoms:[{el:'Cl',pos:[-0.99,0,0]},{el:'Cl',pos:[0.99,0,0]}], bonds:[[0,1,'covalent']] },
+    HCl: { atoms:[{el:'H',pos:[-0.64,0,0]},{el:'Cl',pos:[0.64,0,0]}], bonds:[[0,1,'covalent']] },
+    H2O: { atoms:[{el:'O',pos:[0,0,0]},{el:'H',pos:[0.76,0.59,0]},{el:'H',pos:[-0.76,0.59,0]}],
+           bonds:[[0,1,'covalent'],[0,2,'covalent']] },
+    CO2: { atoms:[{el:'C',pos:[0,0,0]},{el:'O',pos:[1.16,0,0]},{el:'O',pos:[-1.16,0,0]}],
+           bonds:[[0,1,'covalent',2],[0,2,'covalent',2]] },
+    CH4: { atoms:[{el:'C',pos:[0,0,0]},{el:'H',pos:[0.63,0.63,0.63]},{el:'H',pos:[0.63,-0.63,-0.63]},
+                  {el:'H',pos:[-0.63,0.63,-0.63]},{el:'H',pos:[-0.63,-0.63,0.63]}],
+           bonds:[[0,1,'covalent'],[0,2,'covalent'],[0,3,'covalent'],[0,4,'covalent']] },
+    NH3: { atoms:[{el:'N',pos:[0,0.35,0]},{el:'H',pos:[0.82,-0.15,0]},
+                  {el:'H',pos:[-0.41,-0.15,0.71]},{el:'H',pos:[-0.41,-0.15,-0.71]}],
+           bonds:[[0,1,'covalent'],[0,2,'covalent'],[0,3,'covalent']] },
+    Na:  { atoms:[{el:'Na',pos:[0,0,0]}], bonds:[] },
+    Fe:  { atoms:[{el:'Fe',pos:[0,0,0]}], bonds:[] },
+    Mg:  { atoms:[{el:'Mg',pos:[0,0,0]}], bonds:[] },
+    C:   { atoms:[{el:'C',pos:[0,0,0]}], bonds:[] },
+    NaCl:{ atoms:[{el:'Na',pos:[-0.9,0,0]},{el:'Cl',pos:[0.9,0,0]}], bonds:[[0,1,'ionic']] },
+    // Ionic bonds carry a 4th element: how many electrons actually cross for
+    // THAT bond (default 1 if omitted). This isn't always 1 — Mg has 2 valence
+    // electrons and gives both to the single oxygen it's paired with, and in
+    // Fe2O3 each Fe loses 3 total (Fe3+) split across its two O neighbors
+    // rather than 1 apiece, while each terminal O still gains its full 2.
+    MgO: { atoms:[{el:'Mg',pos:[-0.85,0,0]},{el:'O',pos:[0.85,0,0]}], bonds:[[0,1,'ionic',2]] },
+    Fe2O3:{ atoms:[{el:'Fe',pos:[-0.9,0.5,0]},{el:'Fe',pos:[0.9,0.5,0]},{el:'O',pos:[0,1.25,0]},
+                   {el:'O',pos:[-0.9,-0.55,0]},{el:'O',pos:[0.9,-0.55,0]}],
+           bonds:[[0,2,'ionic',1],[1,2,'ionic',1],[0,3,'ionic',2],[1,4,'ionic',2]] },
+    Na2O:{ atoms:[{el:'Na',pos:[-1.1,0.55,0]},{el:'Na',pos:[1.1,0.55,0]},{el:'O',pos:[0,-0.5,0]}],
+           bonds:[[0,2,'ionic'],[1,2,'ionic']] },
+    FeCl3:{ atoms:[{el:'Fe',pos:[0,0,0]},{el:'Cl',pos:[0,1.5,0]},{el:'Cl',pos:[1.3,-0.75,0]},{el:'Cl',pos:[-1.3,-0.75,0]}],
+            bonds:[[0,1,'ionic'],[0,2,'ionic'],[0,3,'ionic']] },
+    MgCl2:{ atoms:[{el:'Cl',pos:[-1.35,0,0]},{el:'Mg',pos:[0,0,0]},{el:'Cl',pos:[1.35,0,0]}],
+            bonds:[[1,0,'ionic'],[1,2,'ionic']] },
+  };
+
+  const REACTIONS = [
+    { a:'H2', b:'O2',  products:['H2O'],        type:'Synthesis',  name:'Formation of water',
+      note:'Two gases combine into the liquid that covers most of the planet.' },
+    { a:'N2', b:'H2',  products:['NH3'],        type:'Synthesis',  name:'Haber process',
+      note:'Industrial ammonia synthesis for fertilizer — run under high pressure and heat with an iron catalyst.' },
+    { a:'CH4', b:'O2', products:['CO2','H2O'],  type:'Combustion', name:'Methane combustion',
+      note:'Complete combustion of natural gas releases the energy stored in its C–H bonds.' },
+    { a:'Na', b:'Cl2', products:['NaCl'],       type:'Synthesis',  name:'Formation of table salt',
+      note:'A metal that reacts violently with water and a toxic gas combine into something you sprinkle on food.' },
+    { a:'Fe', b:'O2',  products:['Fe2O3'],      type:'Oxidation',  name:'Rusting of iron',
+      note:'Slow oxidation at room temperature — the reaction behind rust.' },
+    { a:'Mg', b:'O2',  products:['MgO'],        type:'Combustion', name:'Magnesium combustion',
+      note:'Burns with a blinding white light — once used in photography flashbulbs.' },
+    { a:'C', b:'O2',   products:['CO2'],        type:'Combustion', name:'Carbon combustion',
+      note:'Already 1:1:1 — the simplest balanced equation in this chamber.' },
+    { a:'H2', b:'Cl2', products:['HCl'],        type:'Synthesis',  name:'Hydrogen chloride synthesis',
+      note:'A chain reaction that can be triggered explosively by ultraviolet light.' },
+    { a:'Na', b:'O2',  products:['Na2O'],       type:'Synthesis',  name:'Formation of sodium oxide',
+      note:'Freshly cut sodium tarnishes almost instantly as it reacts with oxygen in the air.' },
+    { a:'Fe', b:'Cl2', products:['FeCl3'],      type:'Synthesis',  name:'Formation of iron(III) chloride',
+      note:'Iron wool glows orange and bursts into flame in an atmosphere of chlorine gas.' },
+    { a:'Mg', b:'Cl2', products:['MgCl2'],      type:'Synthesis',  name:'Formation of magnesium chloride',
+      note:'An ionic salt extracted industrially from seawater and used to de-ice roads.' },
+  ];
+
+  const REACTANT_OPTIONS = ['H2','O2','N2','CH4','Na','Cl2','Fe','Mg','C'];
+
+  function findReaction(a, b){
+    return REACTIONS.find(r => (r.a===a && r.b===b) || (r.a===b && r.b===a)) || null;
+  }
+
+  /* ---------------- What the student is looking at (for Ion) ---------------- */
+  // One shared object, updated from the same hooks that already drive the info panels
+  // (selectReaction, showMoleculeCard/showBondCard, showAtom, enterBondStory and the Bohr
+  // scene's state callback). Ion reads it to decide what "this" means in a question.
+  //   view:     'chamber' | 'detail'
+  //   reaction: the REACTIONS entry for the chosen pair, or null
+  //   element:  symbol of the atom open in the detail view, or null
+  //   shell / particle: the shell or subatomic particle picked inside the atom view
+  //   molecule: formula of the focused molecule (or the one open in the detail view)
+  //   bond:     { type, elA, elB, order } for the bond picked, or null
+  const assistantContext = { view:'chamber', reaction:null, element:null, shell:null, particle:null, molecule:null, bond:null };
+  let ionRefresh = null;        // set once Ion's UI exists
+  let ionLayoutReady = false;
+  let ionChamberSnapshot = null;
+  function setAssistantContext(patch){
+    Object.assign(assistantContext, patch);
+    if (ionRefresh) ionRefresh();
+  }
+  // The detail view sits on top of the chamber without touching it, so remember the
+  // chamber's context on the way in and put it back on the way out.
+  function assistantEnterDetail(formula){
+    if (assistantContext.view !== 'detail') ionChamberSnapshot = Object.assign({}, assistantContext);
+    setAssistantContext({ view:'detail', molecule:formula, bond:null, element:null, shell:null, particle:null });
+    updateIonLayout();
+  }
+  function assistantLeaveDetail(){
+    setAssistantContext(Object.assign({}, ionChamberSnapshot || {}, { view:'chamber' }));
+    ionChamberSnapshot = null;
+    updateIonLayout();
+  }
+
+  const BOND_SYMBOL = { 1:'–', 2:'=', 3:'≡' };
+  // Human-readable list of the distinct bonds in a molecule, e.g. "O=O" or "H–O".
+  function bondList(formula){
+    const def = MOLECULES[formula];
+    const seen = new Set();
+    def.bonds.forEach(([i,j,type,order]) => {
+      const a = def.atoms[i].el, b = def.atoms[j].el;
+      seen.add(type === 'ionic' ? `${a}⋯${b}` : `${a}${BOND_SYMBOL[order||1]}${b}`);
+    });
+    return Array.from(seen);
+  }
+
+  // Oxidation state of every atom in a molecule, derived from its bonds:
+  // each bonded pair's electrons are assigned to the more electronegative atom
+  // (transferred outright for ionic bonds, counted as owned for shared pairs),
+  // and equal-EN pairs (H–H, O=O) contribute nothing — the standard rule.
+  function oxidationStates(formula){
+    const def = MOLECULES[formula];
+    const states = def.atoms.map(() => 0);
+    def.bonds.forEach(([i,j,type,order]) => {
+      const n = order || 1;
+      const enA = ELEMENTS[def.atoms[i].el].en, enB = ELEMENTS[def.atoms[j].el].en;
+      if (enA === enB) return;
+      const lo = enA < enB ? i : j, hi = enA < enB ? j : i;
+      states[lo] += n; states[hi] -= n;
+    });
+    return states;
+  }
+  function formatOxidation(n){ return n === 0 ? '0' : (n > 0 ? '+' : '−') + Math.abs(n); }
+  // One entry per distinct element in the molecule (all atoms of an element
+  // share a state in every molecule in this data set).
+  function oxidationBySymbol(formula){
+    const def = MOLECULES[formula], states = oxidationStates(formula), out = {};
+    def.atoms.forEach((a, k) => { if (!(a.el in out)) out[a.el] = states[k]; });
+    return out;
+  }
+
+  function parseFormula(f){
+    const counts = {};
+    const re = /([A-Z][a-z]?)(\d*)/g;
+    let m;
+    while ((m = re.exec(f))) {
+      if (!m[1]) continue;
+      counts[m[1]] = (counts[m[1]] || 0) + (m[2] ? parseInt(m[2],10) : 1);
+    }
+    return counts;
+  }
+
+  const SUB = {'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉'};
+  function toSubscript(formula){ return formula.replace(/[0-9]/g, d => SUB[d]); }
+
+  function molarMass(formula){
+    const counts = parseFormula(formula);
+    return Object.entries(counts).reduce((sum, [el,n]) => sum + ELEMENTS[el].mass*n, 0);
+  }
+
+  function bondTypeLabel(formula){
+    const bonds = MOLECULES[formula].bonds;
+    if (bonds.length === 0) return 'Single atom';
+    if (bonds.some(b => b[2] === 'ionic')) return 'Ionic bonding';
+    return 'Covalent bonding';
+  }
+
+  // Evenly distribute `count` points across a sphere of the given radius.
+  function fibonacciSphere(count, radius){
+    const points = [];
+    if (count <= 0) return points;
+    const offset = 2 / count;
+    const increment = Math.PI * (3 - Math.sqrt(5));
+    for (let i=0;i<count;i++){
+      const y = ((i*offset) - 1) + (offset/2);
+      const r = Math.sqrt(Math.max(0, 1 - y*y));
+      const phi = i * increment;
+      points.push(new THREE.Vector3(Math.cos(phi)*r*radius, y*radius, Math.sin(phi)*r*radius));
+    }
+    return points;
+  }
+
+  const protonMat = new THREE.MeshStandardMaterial({ color:0xF5A524, roughness:0.4, metalness:0.1 });
+  const neutronMat = new THREE.MeshStandardMaterial({ color:0x7C8AAE, roughness:0.4, metalness:0.1 });
+  const electronMat = new THREE.MeshStandardMaterial({ color:0x5EEAD4, emissive:0x2DD4BF, emissiveIntensity:0.7, roughness:0.3 });
+  const ringMat = new THREE.MeshBasicMaterial({ color:0x3A4A70, transparent:true, opacity:0.55 });
+
+  // Drag-to-orbit + scroll/pinch-to-zoom for a small canvas, independent of the
+  // main chamber's controls — like steering a camera around a tabletop solar
+  // system model: the model animates on its own, the viewer moves around it.
+  function attachOrbitControls(canvasEl, state, minRadius, maxRadius, onTap){
+    canvasEl.style.touchAction = 'none';
+    canvasEl.style.cursor = 'grab';
+    let dragging = false, lastX = 0, lastY = 0;
+    const pointers = new Map();
+    let pinchDist = null, pinchRadius = null;
+    let tapCandidate = null;
+
+    canvasEl.addEventListener('pointerdown', e => {
+      pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+      canvasEl.setPointerCapture(e.pointerId);
+      if (pointers.size === 1) {
+        dragging = true; lastX = e.clientX; lastY = e.clientY;
+        canvasEl.style.cursor = 'grabbing';
+        tapCandidate = { id:e.pointerId, x:e.clientX, y:e.clientY, moved:false };
+      } else if (pointers.size === 2) {
+        dragging = false; tapCandidate = null;
+        const pts = Array.from(pointers.values());
+        pinchDist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+        pinchRadius = state.radius;
+      }
+    });
+    canvasEl.addEventListener('pointermove', e => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+      if (tapCandidate && tapCandidate.id === e.pointerId) {
+        if (Math.hypot(e.clientX-tapCandidate.x, e.clientY-tapCandidate.y) > 6) tapCandidate.moved = true;
+      }
+      if (pointers.size === 2 && pinchDist) {
+        const pts = Array.from(pointers.values());
+        const d = Math.max(1, Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y));
+        state.radius = Math.min(maxRadius, Math.max(minRadius, pinchRadius*(pinchDist/d)));
+        return;
+      }
+      if (!dragging) return;
+      const dx = e.clientX-lastX, dy = e.clientY-lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      state.theta -= dx*0.008;
+      state.phi = Math.min(2.6, Math.max(0.4, state.phi - dy*0.008));
+    });
+    canvasEl.addEventListener('pointerup', e => {
+      const isTap = onTap && tapCandidate && tapCandidate.id === e.pointerId && !tapCandidate.moved && pointers.size === 1;
+      const tapX = tapCandidate ? tapCandidate.x : e.clientX, tapY = tapCandidate ? tapCandidate.y : e.clientY;
+      release(e);
+      tapCandidate = null;
+      if (isTap) onTap(tapX, tapY);
+    });
+    function release(e){
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinchDist = null;
+      if (pointers.size === 0) { dragging = false; canvasEl.style.cursor = 'grab'; }
+    }
+    canvasEl.addEventListener('pointercancel', e => { release(e); tapCandidate = null; });
+    canvasEl.addEventListener('wheel', e => {
+      e.preventDefault();
+      state.radius = Math.min(maxRadius, Math.max(minRadius, state.radius*Math.exp(e.deltaY*0.0015)));
+    }, { passive:false });
+  }
+
+  const upQuarkMat = new THREE.MeshStandardMaterial({ color:0x5EEAD4, emissive:0x0E7B70, emissiveIntensity:0.5 });
+  const downQuarkMat = new THREE.MeshStandardMaterial({ color:0xF5A524, emissive:0x7A4A0A, emissiveIntensity:0.5 });
+  const gluonMat = new THREE.LineBasicMaterial({ color:0xB072FF, transparent:true, opacity:0.55 });
+
+  // A small, self-contained Three.js scene for one element's 3D Bohr model —
+  // same visual language (materials, glow) as the molecules in the chamber.
+  // onStateChange(state) fires whenever selection/drill-down changes, so the
+  // caller can render the right info panel without this function knowing HTML.
+  function buildBohrScene(canvasEl, symbol, onStateChange){
+    const el = ELEMENTS[symbol];
+    const total = el.number + el.neutrons;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 60);
+    // Distance scales with this element's outermost shell so a 1-shell atom (H)
+    // fills the frame as tightly as a 4-shell one (Fe) — a fixed distance would
+    // either crop big atoms or leave small ones tiny.
+    const maxRadius = 1.35 + (el.shells.length-1)*0.85 + 0.3;
+    const dist = (maxRadius*1.25) / Math.tan((21*Math.PI)/180);
+    const minR = dist*0.35, maxR = dist*2.5;
+    const camState = { theta:0.5, phi:1.33, radius:dist };
+    // Aim slightly above the atom's true center, which pushes the whole
+    // render down in frame — otherwise the outer shell's arc reaches up
+    // behind the fixed atom-tabs/particle-counter header at the top of the
+    // viewport. Same trick already used for the bond-story scenes below.
+    const camTarget = new THREE.Vector3(0, maxRadius*0.22, 0);
+    attachOrbitControls(canvasEl, camState, minR, maxR, handleTap);
+    const renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true, alpha:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+    scene.add(new THREE.AmbientLight(0x445577, 0.8));
+    const key = new THREE.DirectionalLight(0xffffff, 1);
+    key.position.set(3, 4, 5);
+    scene.add(key);
+
+    const atomGroup = new THREE.Group();
+    scene.add(atomGroup);
+    const quarkGroup = new THREE.Group();
+    quarkGroup.visible = false;
+    scene.add(quarkGroup);
+
+    // particles: every clickable mesh, each with its OWN cloned material so
+    // isolate-mode can dim siblings without affecting every atom on the page
+    // (the base *Mat objects above are shared templates, not render targets).
+    const particles = [];
+    const GLOW_COLOR = { proton:0xF5A524, neutron:0xAEB9D4, electron:0x2DD4BF, shell:0x2DD4BF };
+    function makeParticle(templateMat, geometry, type, isGhost, extra){
+      const mat = templateMat.clone();
+      mat.transparent = true;
+      if (extra && extra.colorOverride != null) mat.color.setHex(extra.colorOverride);
+      const mesh = new THREE.Mesh(geometry, mat);
+      mesh.userData.particleType = type;
+      mesh.userData.isGhost = !!isGhost;
+      particles.push(Object.assign({
+        mesh, mat, type, isGhost: !!isGhost,
+        baseEmissiveIntensity: mat.emissiveIntensity || 0,
+        baseEmissiveColor: mat.emissive ? mat.emissive.getHex() : 0x000000,
+        baseOpacity: mat.opacity != null ? mat.opacity : 1,
+        baseColor: mat.color ? mat.color.getHex() : null,
+        glowColor: GLOW_COLOR[type],
+      }, extra));
+      return mesh;
+    }
+
+    const nucleusGroup = new THREE.Group();
+    {
+      // Every nucleon is individually clickable, light elements and heavy ones
+      // alike — pack radius and sphere size both scale with the count so a
+      // 56-nucleon iron nucleus doesn't turn into an unreadable solid mass.
+      const packRadius = 0.45 + Math.min(0.5, (total-1)*0.012);
+      const sphereRadius = Math.max(0.11, 0.22 - Math.max(0, total-16)*0.0025);
+      let p = el.number, n = el.neutrons, i = 0;
+      const positions = fibonacciSphere(total, packRadius);
+      while (p > 0 || n > 0) {
+        const isProton = (i % 2 === 0 && p > 0) || n === 0;
+        if (isProton) p--; else n--;
+        const mesh = makeParticle(isProton?protonMat:neutronMat, new THREE.SphereGeometry(sphereRadius,14,12), isProton?'proton':'neutron');
+        mesh.position.copy(positions[i]);
+        nucleusGroup.add(mesh);
+        i++;
+      }
+      // Hydrogen-1 has no neutron at all — a dashed "ghost" sphere marks the
+      // absence itself as something worth clicking, rather than just omitting it.
+      if (el.neutrons === 0) {
+        const ghostMat = new THREE.MeshStandardMaterial({ color:0x7C8AAE, wireframe:true, transparent:true, opacity:0.55, roughness:0.6 });
+        const ghost = makeParticle(ghostMat, new THREE.SphereGeometry(sphereRadius,10,8), 'neutron', true);
+        ghost.position.set(-packRadius, 0, 0);
+        nucleusGroup.add(ghost);
+      }
+    }
+    atomGroup.add(nucleusGroup);
+
+    const shellData = [];
+    const SHELL_LETTERS = ['K','L','M','N'];
+    el.shells.forEach((count, i) => {
+      const radius = 1.35 + i*0.85;
+      const isValence = i === el.shells.length-1;
+      const groupKey = 'shell-' + i;
+      const shellGroup = new THREE.Group();
+      shellGroup.rotation.x = 0.5 + i*0.85;
+      shellGroup.rotation.y = i*0.55;
+
+      // The ring itself is clickable too — selecting it explains that whole
+      // energy level, and calls out the valence shell specifically.
+      // Resting color hints which ring is the valence shell before you even click it.
+      const ring = makeParticle(ringMat, new THREE.TorusGeometry(radius, 0.02, 8, 64), 'shell', false,
+        { isRing:true, shellIndex:i, isValence, electronCount:count, groupKey,
+          letter: SHELL_LETTERS[i] || `#${i+1}`, colorOverride: isValence ? 0x4A6FA5 : null });
+      shellGroup.add(ring);
+      // The ring is deliberately razor-thin to look right, which makes it a
+      // frustratingly small target to actually tap — especially once the
+      // camera's zoomed out or on a touchscreen. A much fatter invisible
+      // torus sits right on top purely as a bigger hit area; three.js still
+      // raycasts invisible meshes, so this changes nothing about how it looks.
+      const ringHitTarget = new THREE.Mesh(
+        new THREE.TorusGeometry(radius, 0.22, 8, 48),
+        new THREE.MeshBasicMaterial({ visible:false })
+      );
+      ringHitTarget.userData.hitProxy = ring;
+      shellGroup.add(ringHitTarget);
+
+      const electrons = [];
+      for (let j=0;j<count;j++){
+        const mesh = makeParticle(electronMat, new THREE.SphereGeometry(0.11,12,10), 'electron', false, { groupKey });
+        shellGroup.add(mesh);
+        electrons.push({ mesh, angle0:(j/count)*Math.PI*2 });
+      }
+      atomGroup.add(shellGroup);
+      shellData.push({ radius, speed:0.5/(i+1) + 0.12, electrons });
+    });
+
+    /* ---------- selection / isolate / camera zoom / quark drill-down ---------- */
+
+    const raycaster = new THREE.Raycaster();
+    let selected = null;     // { mesh, mat, type, isGhost }
+    let quarkNucleon = null; // 'proton' | 'neutron' while quarkGroup is showing
+    let camTween = null;     // { fromRadius, toRadius, start, duration }
+
+    function tweenRadiusTo(target, duration){
+      camTween = { fromRadius:camState.radius, toRadius:target, start:performance.now(), duration:duration||600 };
+    }
+
+    function applyIsolate(){
+      particles.forEach(p => {
+        // Selecting a shell keeps its whole energy level lit (ring + its own
+        // electrons); selecting a single particle highlights only that mesh.
+        const show = !selected ? true
+          : selected.type === 'shell' ? p.groupKey === selected.groupKey
+          : p.mesh === selected.mesh;
+        if (p.isRing) {
+          p.mat.opacity = selected ? (show ? 1 : 0.12) : p.baseOpacity;
+          p.mat.color.setHex(show && selected ? 0x2DD4BF : p.baseColor);
+        } else {
+          p.mat.opacity = selected ? (show ? 1 : 0.15) : 1;
+          if (show && selected) {
+            p.mat.emissive.setHex(p.glowColor);
+          } else {
+            p.mat.emissive.setHex(p.baseEmissiveColor);
+            p.mat.emissiveIntensity = p.baseEmissiveIntensity;
+          }
+        }
+      });
+    }
+
+    function selectParticle(hit){
+      const mesh = hit.object;
+      const entry = particles.find(p => p.mesh === mesh);
+      if (!entry) return;
+      selected = entry;
+      applyIsolate();
+      const target = entry.type === 'electron' ? dist*0.65
+        : entry.type === 'shell' ? Math.min(dist, Math.max(minR, entry.mesh.geometry.parameters.radius*2.3))
+        : minR*1.05;
+      tweenRadiusTo(target);
+      if (onStateChange) onStateChange({
+        mode:'particle', type:entry.type, isGhost:entry.isGhost,
+        shellIndex:entry.shellIndex, isValence:entry.isValence, electronCount:entry.electronCount, letter:entry.letter,
+      });
+    }
+
+    function clearSelection(){
+      if (quarkNucleon) { exitQuarkInternal(); return; }
+      selected = null;
+      applyIsolate();
+      tweenRadiusTo(dist);
+      if (onStateChange) onStateChange({ mode:'atom' });
+    }
+
+    function buildQuarkChildren(nucleonType){
+      while (quarkGroup.children.length) quarkGroup.remove(quarkGroup.children[0]);
+      const defs = nucleonType === 'proton'
+        ? [['u',upQuarkMat,0], ['u',upQuarkMat,2.094], ['d',downQuarkMat,4.189]]
+        : [['d',downQuarkMat,0], ['d',downQuarkMat,2.094], ['u',upQuarkMat,4.189]];
+      const pts = defs.map(([,mat,angle]) => {
+        const pos = new THREE.Vector3(0.5*Math.cos(angle), 0.5*Math.sin(angle), 0);
+        const m = new THREE.Mesh(new THREE.SphereGeometry(0.3,20,16), mat);
+        m.position.copy(pos);
+        quarkGroup.add(m);
+        return pos;
+      });
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([pts[0],pts[1], pts[1],pts[2], pts[2],pts[0]]);
+      quarkGroup.add(new THREE.LineSegments(lineGeo, gluonMat));
+    }
+
+    function enterQuark(nucleonType){
+      quarkNucleon = nucleonType;
+      buildQuarkChildren(nucleonType);
+      atomGroup.visible = false;
+      quarkGroup.visible = true;
+      tweenRadiusTo(2.4, 500);
+      if (onStateChange) onStateChange({ mode:'quark', nucleonType });
+    }
+
+    function exitQuarkInternal(){
+      quarkNucleon = null;
+      quarkGroup.visible = false;
+      atomGroup.visible = true;
+      const target = selected ? (selected.type === 'electron' ? dist*0.65 : minR*1.05) : dist;
+      tweenRadiusTo(target, 500);
+      if (onStateChange) onStateChange(selected ? { mode:'particle', type:selected.type, isGhost:selected.isGhost } : { mode:'atom' });
+    }
+
+    function handleTap(clientX, clientY){
+      if (quarkNucleon) return; // quark view only exits via its own back button
+      const rect = canvasEl.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((clientX-rect.left)/rect.width)*2-1, -((clientY-rect.top)/rect.height)*2+1);
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(atomGroup.children, true);
+      const hit = hits.find(h => h.object.userData && (h.object.userData.particleType || h.object.userData.hitProxy));
+      if (hit) {
+        const proxy = hit.object.userData.hitProxy;
+        selectParticle(proxy ? { object: proxy } : hit);
+      } else clearSelection();
+    }
+
+    function resize(){
+      // Measure the container, not the canvas itself — a <canvas> is a replaced
+      // element with its own intrinsic 300x150 default, which can fight inset:0
+      // sizing. This matches how the main chamber sizes its own canvas.
+      const container = canvasEl.parentElement;
+      const w = container.clientWidth, h = container.clientHeight || w;
+      if (!w) return;
+      camera.aspect = w/h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+
+    return {
+      resize,
+      clearSelection,
+      enterQuark,
+      exitQuark: exitQuarkInternal,
+      update(now, dt){
+        if (camTween) {
+          const p = ease(Math.min(1, (now-camTween.start)/camTween.duration));
+          camState.radius = camTween.fromRadius + (camTween.toRadius-camTween.fromRadius)*p;
+          if (p >= 1) camTween = null;
+        }
+        // Ambient spin pauses once something is selected, so the highlighted
+        // particle doesn't rotate out of frame while its info panel is open.
+        if (!selected && !quarkNucleon) atomGroup.rotation.y += 0.12*dt;
+        quarkGroup.rotation.y += 0.18*dt;
+        shellData.forEach(s => {
+          s.electrons.forEach(e => {
+            const a = e.angle0 + now*0.001*s.speed;
+            // TorusGeometry's ring lies in the local XY plane, so the electron's
+            // path must too — X/Z would trace a circle perpendicular to the ring.
+            e.mesh.position.set(s.radius*Math.cos(a), s.radius*Math.sin(a), 0);
+          });
+        });
+        if (selected) {
+          const pulse = 0.6 + 0.4*Math.sin(now*0.006);
+          if (selected.isRing) selected.mat.opacity = 0.7 + 0.3*pulse;
+          else selected.mat.emissiveIntensity = (selected.type === 'electron' ? 1.1 : 0.9) * pulse;
+        }
+        camera.position.set(
+          camTarget.x + camState.radius*Math.sin(camState.phi)*Math.sin(camState.theta),
+          camTarget.y + camState.radius*Math.cos(camState.phi),
+          camTarget.z + camState.radius*Math.sin(camState.phi)*Math.cos(camState.theta)
+        );
+        camera.lookAt(camTarget);
+        renderer.render(scene, camera);
+      },
+      dispose(){ renderer.dispose(); },
+    };
+  }
+
+  // Brute-force smallest-integer balancer: search space is tiny (<=4 compounds, coeffs 1..8).
+  function balanceEquation(reactantFormulas, productFormulas){
+    const compounds = reactantFormulas.concat(productFormulas);
+    const signs = reactantFormulas.map(()=>1).concat(productFormulas.map(()=>-1));
+    const counts = compounds.map(parseFormula);
+    const elements = Array.from(new Set(counts.flatMap(c => Object.keys(c))));
+    const n = compounds.length;
+    const maxC = 8;
+    let best = null;
+    const coeffs = new Array(n).fill(1);
+
+    function search(idx){
+      if (idx === n) {
+        for (const el of elements) {
+          let sum = 0;
+          for (let i=0;i<n;i++) sum += signs[i]*coeffs[i]*(counts[i][el]||0);
+          if (sum !== 0) return;
+        }
+        const total = coeffs.reduce((s,c)=>s+c,0);
+        if (!best || total < best.total) best = { coeffs: coeffs.slice(), total };
+        return;
+      }
+      for (let c=1; c<=maxC; c++){ coeffs[idx]=c; search(idx+1); }
+    }
+    search(0);
+    return best;
+  }
+
+  /* ---------------- Three.js scene ---------------- */
+
+  const canvas = document.getElementById('scene');
+  const viewport = document.getElementById('viewport');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.xr.enabled = true;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0A0F1C);
+  // Fog's near/far were much too close to the camera's actual working range
+  // (radius 6-20) — zooming out pushed straight into it, dimming everything
+  // toward the background color. Pushed well past the max zoom-out distance
+  // so it no longer visibly affects normal viewing, just distant edge cases.
+  scene.fog = new THREE.Fog(0x0A0F1C, 70, 140);
+
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200);
+
+  const labGroup = new THREE.Group();
+  scene.add(labGroup);
+
+  // Bench / floor grid
+  const grid = new THREE.GridHelper(18, 18, 0x2DD4BF, 0x1B2A44);
+  grid.position.y = -1.3;
+  grid.material.opacity = 0.35;
+  grid.material.transparent = true;
+  labGroup.add(grid);
+
+  // Lights
+  labGroup.add(new THREE.AmbientLight(0x445577, 0.7));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  keyLight.position.set(3, 5, 4);
+  labGroup.add(keyLight);
+  const reactionLight = new THREE.PointLight(0x2DD4BF, 0, 12);
+  reactionLight.position.set(0, 0.6, 0);
+  labGroup.add(reactionLight);
+
+  // Floating "+" / "→" separator sprites so the 3D layout reads like the equation
+  function makeSignSprite(text, color){
+    const canvas = document.createElement('canvas');
+    canvas.width = 128; canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.font = '700 96px "Space Grotesk", sans-serif';
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 64, 68);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:texture, transparent:true, depthWrite:false }));
+    sprite.scale.set(0.85, 0.85, 1);
+    return sprite;
+  }
+  const signPlusReactants = makeSignSprite('+', '#8C9AB8');
+  const signArrow = makeSignSprite('→', '#2DD4BF');
+  const signPlusProducts = makeSignSprite('+', '#8C9AB8');
+  signPlusReactants.position.set(-4.6, 0.6, 0);
+  signArrow.position.set(0, 0.6, 0);
+  signPlusProducts.position.set(4.6, 0.6, 0);
+  signPlusProducts.visible = false;
+  labGroup.add(signPlusReactants, signArrow, signPlusProducts);
+
+  // Faint background starfield
+  (function addStars(){
+    const N = 260;
+    const positions = new Float32Array(N*3);
+    for (let i=0;i<N;i++){
+      const r = 12 + Math.random()*10;
+      const theta = Math.random()*Math.PI*2;
+      const phi = Math.acos((Math.random()*2)-1);
+      positions[i*3]   = r*Math.sin(phi)*Math.cos(theta);
+      positions[i*3+1] = Math.abs(r*Math.cos(phi))*0.6;
+      positions[i*3+2] = r*Math.sin(phi)*Math.sin(theta);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+    const mat = new THREE.PointsMaterial({ color:0x3A4A70, size:0.05, transparent:true, opacity:0.7 });
+    scene.add(new THREE.Points(geo, mat));
+  })();
+
+  // Cached geometries / materials
+  const sphereGeoCache = {};
+  function getSphereGeo(el){
+    if (!sphereGeoCache[el]) sphereGeoCache[el] = new THREE.SphereGeometry(ELEMENTS[el].r, 20, 16);
+    return sphereGeoCache[el];
+  }
+  const sphereMatCache = {};
+  function getSphereMat(el){
+    if (!sphereMatCache[el]) {
+      sphereMatCache[el] = new THREE.MeshStandardMaterial({
+        color: ELEMENTS[el].color, roughness:0.4, metalness:0.1,
+        emissive: ELEMENTS[el].color, emissiveIntensity:0.06,
+      });
+    }
+    return sphereMatCache[el];
+  }
+  const bondMatCovalent = new THREE.MeshStandardMaterial({ color:0xAEB9D4, roughness:0.5, metalness:0.05 });
+  const bondMatIonic = new THREE.MeshStandardMaterial({ color:0xF5A524, roughness:0.4, metalness:0.05, emissive:0x7A4A0A, emissiveIntensity:0.5 });
+
+  function buildBond(posA, posB, type, order){
+    const a = new THREE.Vector3(...posA), b = new THREE.Vector3(...posB);
+    const dir = new THREE.Vector3().subVectors(b,a);
+    const len = dir.length();
+    const mid = new THREE.Vector3().addVectors(a,b).multiplyScalar(0.5);
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
+
+    if (type === 'covalent') {
+      // Bond order (1/2/3 shared pairs, e.g. O=O or N#N) renders as that many
+      // thinner parallel cylinders rather than one bond of the same thickness —
+      // otherwise a double bond looks structurally identical to a single one.
+      const n = order || 1;
+      const radius = n === 1 ? 0.09 : 0.075;
+      const geo = new THREE.CylinderGeometry(radius, radius, len, 8);
+      const axis = dir.clone().normalize();
+      const arbitrary = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1,0,0) : new THREE.Vector3(0,1,0);
+      const perp = new THREE.Vector3().crossVectors(axis, arbitrary).normalize().multiplyScalar(0.16);
+      const meshes = [];
+      for (let k=0;k<n;k++){
+        const mesh = new THREE.Mesh(geo, bondMatCovalent);
+        mesh.position.copy(mid).addScaledVector(perp, k - (n-1)/2);
+        mesh.quaternion.copy(quat);
+        mesh.userData.disposeGeo = k === n-1; // geometry is shared across the parallel meshes — dispose it once
+        meshes.push(mesh);
+      }
+      return meshes;
+    }
+    // ionic: solid and a touch thicker/brighter than a covalent bond, so the
+    // electrostatic attraction reads as clearly as the shared-electron bond
+    // does. Ionic bonding is electrostatic rather than discrete shared pairs,
+    // so it always renders as one line regardless of how many electrons
+    // actually transfer (that shows up in the bond-story animation instead).
+    const geo = new THREE.CylinderGeometry(0.11, 0.11, len, 8);
+    const mesh = new THREE.Mesh(geo, bondMatIonic);
+    mesh.position.copy(mid); mesh.quaternion.copy(quat);
+    mesh.userData.disposeGeo = true;
+    const meshes = [mesh];
+    return meshes;
+  }
+
+  function buildMoleculeMesh(formula){
+    const def = MOLECULES[formula];
+    const group = new THREE.Group();
+    def.atoms.forEach(atom => {
+      const mesh = new THREE.Mesh(getSphereGeo(atom.el), getSphereMat(atom.el));
+      mesh.position.set(atom.pos[0], atom.pos[1], atom.pos[2]);
+      group.add(mesh);
+    });
+    def.bonds.forEach(([i,j,type,count]) => {
+      buildBond(def.atoms[i].pos, def.atoms[j].pos, type, count).forEach(m => {
+        m.userData.bondType = type;
+        m.userData.elementA = def.atoms[i].el;
+        m.userData.elementB = def.atoms[j].el;
+        m.userData.order = count || 1;
+        group.add(m);
+      });
+    });
+    group.userData.formula = formula;
+    return group;
+  }
+
+  // A small, independent Three.js scene showing the whole molecule so you can
+  // see where the atom you're inspecting actually sits within it. Atom spheres
+  // get their OWN cloned materials (not the shared getSphereMat cache) so
+  // highlighting one here can't bleed into how that element renders elsewhere.
+  function buildMoleculeLocator(canvasEl, formula, onSelectElement){
+    const def = MOLECULES[formula];
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 50);
+    const renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true, alpha:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    scene.add(new THREE.AmbientLight(0x445577, 0.9));
+    const key = new THREE.DirectionalLight(0xffffff, 0.9);
+    key.position.set(3, 4, 5);
+    scene.add(key);
+
+    const group = new THREE.Group();
+    scene.add(group);
+    const atomMeshes = [];
+    def.atoms.forEach(atom => {
+      const mat = new THREE.MeshStandardMaterial({ color:ELEMENTS[atom.el].color, roughness:0.35, metalness:0.15 });
+      const mesh = new THREE.Mesh(getSphereGeo(atom.el), mat);
+      mesh.position.set(atom.pos[0], atom.pos[1], atom.pos[2]);
+      mesh.userData.element = atom.el;
+      group.add(mesh);
+      atomMeshes.push({ mesh, mat, element:atom.el });
+    });
+    def.bonds.forEach(([i,j,type,count]) => {
+      buildBond(def.atoms[i].pos, def.atoms[j].pos, type, count).forEach(m => group.add(m));
+    });
+
+    const sphere = new THREE.Box3().setFromObject(group).getBoundingSphere(new THREE.Sphere());
+    const dist = Math.max(2.4, sphere.radius*3.4);
+    camera.position.set(0, dist*0.32, dist);
+    camera.lookAt(0, 0, 0);
+
+    function setHighlight(symbol){
+      atomMeshes.forEach(a => {
+        const on = a.element === symbol;
+        a.mat.emissive.setHex(on ? 0x2DD4BF : 0x000000);
+        a.mat.emissiveIntensity = on ? 0.85 : 0;
+      });
+    }
+
+    const raycaster = new THREE.Raycaster();
+    function handleClick(e){
+      if (!onSelectElement) return;
+      const rect = canvasEl.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(group.children, true);
+      const hit = hits.find(h => h.object.userData && h.object.userData.element);
+      if (hit) onSelectElement(hit.object.userData.element);
+    }
+    canvasEl.addEventListener('click', handleClick);
+
+    function resize(){
+      const container = canvasEl.parentElement;
+      const w = container.clientWidth, h = container.clientHeight || w;
+      if (!w) return;
+      camera.aspect = w/h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+
+    return {
+      resize,
+      setHighlight,
+      update(now, dt){ group.rotation.y += 0.22*dt; renderer.render(scene, camera); },
+      dispose(){ canvasEl.removeEventListener('click', handleClick); renderer.dispose(); },
+    };
+  }
+
+  // The full-screen "Molecule" tab in the atom detail view — same molecule,
+  // but drag/zoom-able, with both atoms AND bonds individually clickable.
+  // Clicking an atom hands off to the atom Bohr view; clicking a bond explains
+  // it right here (reusing bondInfo — the same explanation the main chamber gives).
+  function buildMoleculeSceneFull(canvasEl, formula, callbacks){
+    const def = MOLECULES[formula];
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 60);
+    const renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true, alpha:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    scene.add(new THREE.AmbientLight(0x445577, 0.8));
+    const key = new THREE.DirectionalLight(0xffffff, 1);
+    key.position.set(3, 4, 5);
+    scene.add(key);
+
+    const group = new THREE.Group();
+    scene.add(group);
+    def.atoms.forEach(atom => {
+      const mesh = new THREE.Mesh(getSphereGeo(atom.el), getSphereMat(atom.el));
+      mesh.position.set(atom.pos[0], atom.pos[1], atom.pos[2]);
+      mesh.userData.element = atom.el;
+      group.add(mesh);
+    });
+    def.bonds.forEach(([i,j,type,count]) => {
+      buildBond(def.atoms[i].pos, def.atoms[j].pos, type, count).forEach(m => {
+        m.userData.bondType = type;
+        m.userData.elementA = def.atoms[i].el;
+        m.userData.elementB = def.atoms[j].el;
+        m.userData.atomIndexA = i;
+        m.userData.atomIndexB = j;
+        group.add(m);
+      });
+    });
+
+    const sphere = new THREE.Box3().setFromObject(group).getBoundingSphere(new THREE.Sphere());
+    const dist = Math.max(3.2, sphere.radius*2.6);
+    const camState = { theta:0.4, phi:1.15, radius:dist };
+    attachOrbitControls(canvasEl, camState, dist*0.35, dist*2.5, handleTap);
+
+    const raycaster = new THREE.Raycaster();
+    function handleTap(clientX, clientY){
+      const rect = canvasEl.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((clientX-rect.left)/rect.width)*2-1, -((clientY-rect.top)/rect.height)*2+1);
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(group.children, true);
+      if (!hits.length) return;
+      const bondHit = hits.find(h => h.object.userData && h.object.userData.bondType);
+      if (bondHit) {
+        const d = bondHit.object.userData;
+        callbacks.onSelectBond(d.bondType, d.elementA, d.elementB, d.atomIndexA, d.atomIndexB);
+        return;
+      }
+      const atomHit = hits.find(h => h.object.userData && h.object.userData.element);
+      if (atomHit) callbacks.onSelectAtom(atomHit.object.userData.element);
+    }
+
+    function resize(){
+      const container = canvasEl.parentElement;
+      const w = container.clientWidth, h = container.clientHeight || w;
+      if (!w) return;
+      camera.aspect = w/h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+
+    return {
+      resize,
+      update(now, dt){
+        group.rotation.y += 0.1*dt;
+        camera.position.set(
+          camState.radius*Math.sin(camState.phi)*Math.sin(camState.theta),
+          camState.radius*Math.cos(camState.phi),
+          camState.radius*Math.sin(camState.phi)*Math.cos(camState.theta)
+        );
+        camera.lookAt(0, 0, 0);
+        renderer.render(scene, camera);
+      },
+      dispose(){ renderer.dispose(); },
+    };
+  }
+
+  // worldScale sets the sprite's actual size in the scene — fontSize alone
+  // only affects texture crispness. Bond-story scenes span very different
+  // camera distances (a 4-shell iron atom needs a far more zoomed-out camera
+  // than sodium does), so without scaling to worldScale a label that reads
+  // fine in one scene renders nearly invisible in another.
+  function makeLabelSprite(text, color, fontSize, worldScale){
+    const canvas = document.createElement('canvas');
+    canvas.width = 200; canvas.height = 100;
+    const ctx = canvas.getContext('2d');
+    ctx.font = `700 ${fontSize || 44}px "Space Grotesk", sans-serif`;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 100, 54);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:texture, transparent:true, depthWrite:false, depthTest:false }));
+    const s = worldScale || 1.3;
+    sprite.scale.set(s, s*0.5, 1);
+    return sprite;
+  }
+
+  // A lean, non-interactive Bohr-style atom for the bond-story animation below.
+  // Shells are deliberately flat (no tilt) here — a clearer, more diagram-like
+  // read for a side-by-side transfer/sharing animation than the fully 3D tilted
+  // rings used in the main atom explorer, and it makes the electron-path math
+  // trivial (everything lives in one shared plane facing the camera).
+  function buildSimpleAtom(symbol, outerShellOnly){
+    const el = ELEMENTS[symbol];
+    const total = el.number + el.neutrons;
+    const group = new THREE.Group();
+
+    const packRadius = 0.45 + Math.min(0.5, (total-1)*0.012);
+    const sphereRadius = Math.max(0.11, 0.22 - Math.max(0, total-16)*0.0025);
+    const nucleusGroup = new THREE.Group();
+    let p = el.number, n = el.neutrons, i = 0;
+    const positions = fibonacciSphere(total, packRadius);
+    while (p > 0 || n > 0) {
+      const isProton = (i % 2 === 0 && p > 0) || n === 0;
+      if (isProton) p--; else n--;
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(sphereRadius,14,12), (isProton?protonMat:neutronMat).clone());
+      mesh.position.copy(positions[i]);
+      nucleusGroup.add(mesh);
+      i++;
+    }
+    group.add(nucleusGroup);
+
+    // Inner shells aren't relevant to bonding — hiding them (core electrons
+    // implied, same as a standard Lewis structure) keeps a many-shelled atom
+    // like sodium from turning into a cluttered stack of rings here. Most
+    // elements only need their true outermost shell (depth 1); a few (iron)
+    // set bondShellDepth to show more, because their bonding electrons
+    // genuinely come from more than one shell (see the comment on Fe above).
+    const shells = [];
+    const depth = outerShellOnly ? (el.bondShellDepth || 1) : el.shells.length;
+    el.shells.forEach((count, idx) => {
+      if (outerShellOnly && idx < el.shells.length - depth) return;
+      const radius = 1.35 + idx*0.85;
+      const ringMatInst = ringMat.clone();
+      group.add(new THREE.Mesh(new THREE.TorusGeometry(radius, 0.02, 8, 64), ringMatInst));
+      const electrons = [];
+      for (let j=0;j<count;j++){
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.13,12,10), electronMat.clone());
+        group.add(mesh);
+        electrons.push({ mesh, angle0:(j/count)*Math.PI*2 });
+      }
+      shells.push({ radius, ring:ringMatInst, electrons });
+    });
+
+    return { symbol, group, shells, maxRadius: 1.35 + Math.max(0, el.shells.length-1)*0.85 };
+  }
+
+  // The bond-story animation: two atoms side by side, with the actual electron
+  // that crosses over (ionic) or the pair that ends up shared (covalent)
+  // physically animated — "electron transfer" and "electron sharing" as a
+  // thing you watch happen, not just a phrase in a sentence.
+  // hubIndex: index into MOLECULES[formula].atoms for the hub atom (e.g. O in
+  // H2O). spokes: [{ atomIndex, bondType }] — every atom bonded to the hub,
+  // e.g. both hydrogens. A molecule with only one bond total collapses to a
+  // single spoke automatically — the same pairwise view this replaces.
+  function buildBondStoryScene(canvasEl, formula, hubIndex, spokeDefs){
+    const def = MOLECULES[formula];
+    const hubEl = def.atoms[hubIndex].el;
+    const spokes = spokeDefs.map(s => ({ el: def.atoms[s.atomIndex].el, bondType: s.bondType, count: s.count||1 }));
+    const N = spokes.length;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 60);
+    const renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true, alpha:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    scene.add(new THREE.AmbientLight(0x445577, 0.85));
+    const key = new THREE.DirectionalLight(0xffffff, 1);
+    key.position.set(3, 5, 6);
+    scene.add(key);
+
+    const root = new THREE.Group();
+    scene.add(root);
+
+    // Label size/clearance scale with the atom's own radius, not a fixed
+    // constant — otherwise labels sized for a small NaCl-style scene render
+    // tiny once the camera pulls back for a bigger, multi-shell atom like Fe.
+    function labelScaleFor(radius){ return Math.max(1.7, radius*0.7); }
+    function labelYFor(pos, radius, scale){ return pos.y + radius + scale*0.35 + 0.35; }
+    // The post-transfer ion label (e.g. "Na⁺") is intentionally bigger than the
+    // resting element label — framing below uses this too, so that eventual
+    // reveal doesn't clip at the edge of a frame sized for the smaller label.
+    const ION_LABEL_BOOST = 1.5;
+
+    function separation(rHub, rSpoke, covalent){
+      // Covalent: overlap the outer shells, Venn-diagram style, so the shared
+      // pair sits where the circles actually intersect. Ionic: keep them
+      // clearly separate — nothing is shared, one atom gives, one takes.
+      if (covalent) { const smaller = Math.min(rHub, rSpoke); return rHub + rSpoke - smaller*0.85; }
+      return rHub + rSpoke + 0.6;
+    }
+
+    // Positions/framing depend only on the hub + spoke elements — computed
+    // once, so replaying resets the electrons, not the camera you've dragged.
+    const hubMaxRadius = 1.35 + Math.max(0, ELEMENTS[hubEl].shells.length-1)*0.85;
+    const spokeMaxRadii = spokes.map(s => 1.35 + Math.max(0, ELEMENTS[s.el].shells.length-1)*0.85);
+
+    let hubPos, spokePos;
+    if (N <= 1) {
+      const d = N === 1 ? separation(hubMaxRadius, spokeMaxRadii[0], spokes[0].bondType === 'covalent') : 3;
+      hubPos = new THREE.Vector3(-d/2, 0, 0);
+      spokePos = N === 1 ? [new THREE.Vector3(d/2, 0, 0)] : [];
+    } else {
+      // Multiple spokes fan out above the hub — same idea as the reference
+      // water diagram (O at the bottom, both H's arranged above it).
+      hubPos = new THREE.Vector3(0, 0, 0);
+      const span = Math.min(150, 50 + 25*(N-1)) * Math.PI/180;
+      spokePos = spokes.map((s, i) => {
+        const angle = (Math.PI/2) - span/2 + span*(i/(N-1));
+        const d = separation(hubMaxRadius, spokeMaxRadii[i], s.bondType === 'covalent');
+        return new THREE.Vector3(d*Math.cos(angle), d*Math.sin(angle), 0);
+      });
+    }
+
+    // Framing must include how far each label reaches above its atom, not
+    // just the ring radius — otherwise a big, properly-legible label (the
+    // whole point of the fix above) just gets clipped at the top of frame.
+    const extents = [{ p:hubPos, r:hubMaxRadius }, ...spokePos.map((p,i) => ({ p, r:spokeMaxRadii[i] }))];
+    const halfWidth = Math.max(...extents.map(o => Math.abs(o.p.x)+o.r)) + 0.3;
+    const halfHeight = Math.max(...extents.map(o => {
+      const labelScale = labelScaleFor(o.r) * ION_LABEL_BOOST;
+      return Math.abs(o.p.y) + o.r + labelScale*0.55 + 0.2;
+    }));
+    const frameSize = Math.max(halfWidth, halfHeight*1.05);
+    const dist = Math.max(4.5, (frameSize*1.08) / Math.tan((21*Math.PI)/180));
+    const camState = { theta:0.08, phi:1.3, radius:dist };
+    // Aim slightly above the composition's true center, which pushes
+    // everything down in the frame — otherwise the tallest spokes (and their
+    // labels) render up under the fixed "Fe / O / Molecule" tab bar, which
+    // sits on top of the canvas and hides whatever 3D content is behind it.
+    const camTarget = new THREE.Vector3(0, halfHeight*0.22, 0);
+    attachOrbitControls(canvasEl, camState, dist*0.45, dist*2, null);
+
+    let hubAtom = null, spokeAtoms = [], hubLabel = null, spokeLabels = [];
+    let animState = 'idle', animStart = 0, travelers = [], sharedPairs = [];
+    const DURATION_SETTLE = 700, DURATION_TRAVEL = 2600;
+
+    // Rebuilds every atom from scratch — the reliable way to reset state for a
+    // replay, rather than trying to reverse in-place mutations (an electron
+    // that already crossed over can't just be "un-popped" from an array).
+    function setupAtoms(){
+      travelers.forEach(tr => { if (tr.mesh.parent === root) root.remove(tr.mesh); });
+      sharedPairs.forEach(sp => {
+        if (sp.a.mesh.parent === root) root.remove(sp.a.mesh);
+        if (sp.b.mesh.parent === root) root.remove(sp.b.mesh);
+      });
+      if (hubAtom) root.remove(hubAtom.group);
+      spokeAtoms.forEach(a => root.remove(a.group));
+      if (hubLabel) root.remove(hubLabel);
+      spokeLabels.forEach(l => root.remove(l));
+
+      hubAtom = buildSimpleAtom(hubEl, true);
+      hubAtom.group.position.copy(hubPos);
+      root.add(hubAtom.group);
+      const hubLabelScale = labelScaleFor(hubMaxRadius);
+      hubLabel = makeLabelSprite(hubEl, '#E8EDF8', 52, hubLabelScale);
+      hubLabel.position.set(hubPos.x, labelYFor(hubPos, hubMaxRadius, hubLabelScale), 0);
+      root.add(hubLabel);
+
+      spokeAtoms = spokes.map((s, i) => {
+        const a = buildSimpleAtom(s.el, true);
+        a.group.position.copy(spokePos[i]);
+        root.add(a.group);
+        return a;
+      });
+      spokeLabels = spokes.map((s, i) => {
+        const scale = labelScaleFor(spokeMaxRadii[i]);
+        const l = makeLabelSprite(s.el, '#E8EDF8', 52, scale);
+        l.position.set(spokePos[i].x, labelYFor(spokePos[i], spokeMaxRadii[i], scale), 0);
+        root.add(l);
+        return l;
+      });
+    }
+
+    function worldOf(pos, radius, angle){
+      return new THREE.Vector3(pos.x + radius*Math.cos(angle), pos.y + radius*Math.sin(angle), 0);
+    }
+
+    function beginTravel(){
+      const now = performance.now();
+      const hubOuter = hubAtom.shells[hubAtom.shells.length-1];
+      let hubCursor = hubOuter.electrons.length; // gives each covalent spoke a distinct hub electron
+
+      // Multiple electrons can land on the same ring within this one call
+      // (e.g. Mg gives O both of its electrons, or two Na spokes both feed
+      // the same O hub in Na2O) — but arrive() doesn't actually push into
+      // .electrons until the flight finishes, so .length stays stale for
+      // every electron queued in this loop. Reserve slots up front instead
+      // of reading .length live, so simultaneous arrivals don't overlap.
+      const reserved = new Map();
+      function reserveSlot(outer){
+        const used = reserved.get(outer) || 0;
+        reserved.set(outer, used + 1);
+        const n = outer.electrons.length + used;
+        return (n / (n + 1)) * Math.PI * 2;
+      }
+
+      spokes.forEach((s, i) => {
+        const spokeAtom = spokeAtoms[i];
+        const spokeOuter = spokeAtom.shells[spokeAtom.shells.length-1];
+
+        // Electrons that cross between atoms fly through world space, but a
+        // mesh's .position is interpreted relative to its CURRENT parent — so
+        // it must be reparented to `root` (no offset of its own) for the
+        // flight, otherwise its world coordinates get re-added to whichever
+        // atom group it's still sitting inside and it renders miles off target.
+        if (s.bondType === 'ionic') {
+          // The hub is chosen by bond count for LAYOUT purposes only (e.g. O is
+          // the hub in Na2O because two sodiums point at it) — that says nothing
+          // about which side actually gives up the electron. The donor is
+          // whichever atom holds its valence electrons more loosely, i.e. the
+          // lower-electronegativity element, regardless of which one is "hub".
+          const hubIsDonor = ELEMENTS[hubEl].en <= ELEMENTS[s.el].en;
+          const donorOuter = hubIsDonor ? hubOuter : spokeOuter;
+          const donorPos = hubIsDonor ? hubPos : spokePos[i];
+          const receiverOuter = hubIsDonor ? spokeOuter : hubOuter;
+          const receiverPos = hubIsDonor ? spokePos[i] : hubPos;
+          const receiverGroup = hubIsDonor ? spokeAtom.group : hubAtom.group;
+
+          // Ionic bonds aren't always a 1-electron transfer (Mg gives O both
+          // of its valence electrons to fill O's octet) — loop the bond's
+          // actual electron count instead of moving exactly one.
+          for (let k = 0; k < (s.count||1); k++) {
+            const e = donorOuter.electrons.pop();
+            if (!e) break; // donor ran out of valence electrons
+            const from = worldOf(donorPos, donorOuter.radius, e.angle0 + now*0.0006);
+            const toAngle = reserveSlot(receiverOuter);
+            const to = worldOf(receiverPos, receiverOuter.radius, toAngle);
+            const control = new THREE.Vector3((from.x+to.x)/2, Math.max(from.y,to.y)+1.6, 0.8);
+            root.add(e.mesh);
+            e.mesh.position.copy(from);
+            travelers.push({ mesh:e.mesh, from, to, control, arrive(){
+              receiverGroup.add(e.mesh);
+              e.mesh.position.set(receiverOuter.radius*Math.cos(toAngle), receiverOuter.radius*Math.sin(toAngle), 0);
+              receiverOuter.electrons.push({ mesh:e.mesh, angle0:toAngle });
+            }});
+          }
+        } else {
+          // Bond order (double/triple bonds like O=O or N#N) means more than
+          // one shared pair between this hub and spoke — loop it instead of
+          // always moving exactly one pair, taking a distinct electron from
+          // each side per pair.
+          const order = s.count || 1;
+          for (let p = 0; p < order; p++) {
+            hubCursor -= 1;
+            const eH = hubOuter.electrons[hubCursor];
+            const eS = spokeOuter.electrons[spokeOuter.electrons.length-1-p];
+            if (!eH || !eS) break;
+            eH.frozen = true; eS.frozen = true;
+            const fromH = worldOf(hubPos, hubOuter.radius, eH.angle0 + now*0.0006);
+            const fromS = worldOf(spokePos[i], spokeOuter.radius, eS.angle0 + now*0.0006);
+            root.add(eH.mesh, eS.mesh);
+            eH.mesh.position.copy(fromH);
+            eS.mesh.position.copy(fromS);
+            // Extra pairs stack along depth so a double/triple bond reads as
+            // parallel shared pairs instead of overlapping at one point.
+            const depthOffset = (p - (order-1)/2) * 0.45;
+            const mid = new THREE.Vector3((hubPos.x+spokePos[i].x)/2, (hubPos.y+spokePos[i].y)/2, 0.4+depthOffset);
+            const dir = new THREE.Vector3().subVectors(spokePos[i], hubPos).normalize();
+            const perp = new THREE.Vector3(-dir.y, dir.x, 0).multiplyScalar(0.3);
+            const toH = new THREE.Vector3(mid.x-perp.x, mid.y-perp.y, mid.z);
+            const toS = new THREE.Vector3(mid.x+perp.x, mid.y+perp.y, mid.z);
+            travelers.push(
+              { mesh:eH.mesh, from:fromH, to:toH, control:new THREE.Vector3((fromH.x+toH.x)/2, fromH.y+ (fromH.y>=mid.y?1.3:-1.3), 0.6+depthOffset), arrive(){} },
+              { mesh:eS.mesh, from:fromS, to:toS, control:new THREE.Vector3((fromS.x+toS.x)/2, fromS.y+ (fromS.y>=mid.y?1.3:-1.3), 0.6+depthOffset), arrive(){} },
+            );
+            sharedPairs.push({ a:eH, b:eS, mid });
+          }
+        }
+      });
+    }
+
+    // Turns a signed charge count into the right ion notation — magnitude 1
+    // is conventionally unmarked (Na+, not Na1+), 2/3 use the superscript
+    // digit (Mg2+, Fe3+). Nothing in this chamber goes past 3.
+    function ionSup(charge){
+      if (charge === 0) return '';
+      const digit = { 1:'', 2:'²', 3:'³' }[Math.abs(charge)] ?? String(Math.abs(charge));
+      return digit + (charge > 0 ? '⁺' : '⁻');
+    }
+
+    function finishResult(){
+      // The ion notation is the payoff of the whole animation, so it gets a
+      // noticeably bigger label than the resting element symbol, not just the
+      // same size with a character appended. Direction (who gained vs lost)
+      // mirrors beginTravel's electronegativity check — the hub isn't always
+      // the donor (e.g. O is the hub in Na2O but the electron RECEIVER) — and
+      // magnitude mirrors each bond's own electron count, not just 1 per bond
+      // (Mg loses 2 electrons to a single O, becoming Mg2+, not Mg+).
+      let hubCharge = 0;
+      spokes.forEach((s, i) => {
+        if (s.bondType !== 'ionic') return;
+        const hubIsDonor = ELEMENTS[hubEl].en <= ELEMENTS[s.el].en;
+        const count = s.count || 1;
+        // Hub donating makes the hub positive and this spoke negative, and
+        // vice versa when the spoke is the one giving up its electron(s).
+        hubCharge += hubIsDonor ? count : -count;
+        const spokeCharge = hubIsDonor ? -count : count;
+        root.remove(spokeLabels[i]);
+        const scale = labelScaleFor(spokeMaxRadii[i]) * ION_LABEL_BOOST;
+        const color = spokeCharge > 0 ? '#F5A524' : '#5EEAD4';
+        spokeLabels[i] = makeLabelSprite(s.el + ionSup(spokeCharge), color, 60, scale);
+        spokeLabels[i].position.set(spokePos[i].x, labelYFor(spokePos[i], spokeMaxRadii[i], scale), 0);
+        root.add(spokeLabels[i]);
+      });
+      if (hubCharge !== 0) {
+        const hubOuter = hubAtom.shells[hubAtom.shells.length-1];
+        const ringNowEmpty = hubOuter.electrons.length === 0;
+        if (ringNowEmpty) hubOuter.ring.opacity = 0;
+        // Once the ring is gone, the atom's visible size shrinks to just its
+        // nucleus — keep the label close to that instead of leaving it
+        // floating up at the old (now-invisible) ring's radius, stranded near
+        // whatever else happens to be up there.
+        const effectiveRadius = ringNowEmpty ? 0.6 : hubMaxRadius;
+        const color = hubCharge > 0 ? '#F5A524' : '#5EEAD4';
+        root.remove(hubLabel);
+        const scale = labelScaleFor(effectiveRadius) * ION_LABEL_BOOST;
+        hubLabel = makeLabelSprite(hubEl + ionSup(hubCharge), color, 60, scale);
+        hubLabel.position.set(hubPos.x, labelYFor(hubPos, effectiveRadius, scale), 0);
+        root.add(hubLabel);
+      }
+    }
+
+    function play(){
+      setupAtoms();
+      travelers = [];
+      sharedPairs = [];
+      animState = 'settle';
+      animStart = performance.now();
+    }
+    play();
+
+    function resize(){
+      const container = canvasEl.parentElement;
+      const w = container.clientWidth, h = container.clientHeight || w;
+      if (!w) return;
+      camera.aspect = w/h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+
+    function orbit(atom, now){
+      // Electrons are children of atom.group, which already carries its own
+      // offset — position them in LOCAL space only. Adding the group's own
+      // offset again here would double-count it and scatter them off the ring.
+      atom.shells.forEach(s => {
+        s.electrons.forEach(e => {
+          if (e.frozen) return;
+          const a = e.angle0 + now*0.0006;
+          e.mesh.position.set(s.radius*Math.cos(a), s.radius*Math.sin(a), 0);
+        });
+      });
+    }
+
+    return {
+      resize,
+      replay: play,
+      update(now){
+        orbit(hubAtom, now);
+        spokeAtoms.forEach(a => orbit(a, now));
+
+        const t = now - animStart;
+        if (animState === 'settle' && t > DURATION_SETTLE) {
+          beginTravel();
+          animState = 'travel'; animStart = now;
+        } else if (animState === 'travel') {
+          const p = ease(Math.min(1, (now-animStart)/DURATION_TRAVEL));
+          travelers.forEach(tr => {
+            const a = new THREE.Vector3().lerpVectors(tr.from, tr.control, p);
+            const b = new THREE.Vector3().lerpVectors(tr.control, tr.to, p);
+            tr.mesh.position.lerpVectors(a, b, p);
+          });
+          if (p >= 1) { travelers.forEach(tr => tr.arrive()); finishResult(); animState = 'done'; }
+        } else if (animState === 'done' && sharedPairs.length) {
+          const t2 = now*0.0012;
+          sharedPairs.forEach(sp => {
+            sp.a.mesh.position.set(sp.mid.x+0.22*Math.cos(t2), sp.mid.y+0.22*Math.sin(t2), sp.mid.z);
+            sp.b.mesh.position.set(sp.mid.x+0.22*Math.cos(t2+Math.PI), sp.mid.y+0.22*Math.sin(t2+Math.PI), sp.mid.z);
+          });
+        }
+
+        camera.position.set(
+          camTarget.x + camState.radius*Math.sin(camState.phi)*Math.sin(camState.theta),
+          camTarget.y + camState.radius*Math.cos(camState.phi),
+          camTarget.z + camState.radius*Math.sin(camState.phi)*Math.cos(camState.theta)
+        );
+        camera.lookAt(camTarget);
+        renderer.render(scene, camera);
+      },
+      dispose(){ renderer.dispose(); },
+    };
+  }
+
+  // The ionic counterpart to buildBondStoryScene above. Ionic transfer isn't
+  // always a single donor handing off to one or more receivers (that star
+  // shape IS handled fine by the function above) — Fe2O3 has TWO donors (both
+  // iron atoms) and THREE receivers (all three oxygens), with the bridging
+  // oxygen fed by both irons at once. donors/receivers are atom indices into
+  // MOLECULES[formula].atoms; edges are { donorIdx, receiverIdx, count }.
+  // Most donors (Na, Mg) keep all their bonding electrons in one outer shell,
+  // but iron doesn't — its 3rd electron for Fe3+ comes from the shell just
+  // inside its outer one (bondShellDepth exposes both). Walk inward from the
+  // true outer shell until we find one that still has an electron to give.
+  function popOuterElectron(atom){
+    for (let i = atom.shells.length - 1; i >= 0; i--) {
+      if (atom.shells[i].electrons.length > 0) return { shell: atom.shells[i], electron: atom.shells[i].electrons.pop() };
+    }
+    return null;
+  }
+
+  function buildIonicNetworkScene(canvasEl, formula, donors, receivers, edges){
+    const def = MOLECULES[formula];
+    const donorEls = donors.map(idx => def.atoms[idx].el);
+    const receiverEls = receivers.map(idx => def.atoms[idx].el);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 60);
+    const renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true, alpha:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    scene.add(new THREE.AmbientLight(0x445577, 0.85));
+    const key = new THREE.DirectionalLight(0xffffff, 1);
+    key.position.set(3, 5, 6);
+    scene.add(key);
+
+    const root = new THREE.Group();
+    scene.add(root);
+
+    function labelScaleFor(radius){ return Math.max(1.7, radius*0.7); }
+    function labelYFor(pos, radius, scale){ return pos.y + radius + scale*0.35 + 0.35; }
+    const ION_LABEL_BOOST = 1.5;
+
+    const donorRadii = donorEls.map(el => 1.35 + Math.max(0, ELEMENTS[el].shells.length-1)*0.85);
+    const receiverRadii = receiverEls.map(el => 1.35 + Math.max(0, ELEMENTS[el].shells.length-1)*0.85);
+
+    // Each side lays out as its own horizontal row — donors below, receivers
+    // above, generalizing the single-pair "left gives, right takes" layout to
+    // however many atoms are actually on each side.
+    function rowPositions(radii, y){
+      const gap = 0.7;
+      const totalWidth = radii.reduce((s,r) => s + r*2, 0) + gap*Math.max(0, radii.length-1);
+      let x = -totalWidth/2;
+      return radii.map(r => { x += r; const p = new THREE.Vector3(x, y, 0); x += r + gap; return p; });
+    }
+
+    let donorPos, receiverPos;
+    if (donors.length === 1 && receivers.length === 1) {
+      const d = donorRadii[0] + receiverRadii[0] + 0.6;
+      donorPos = [new THREE.Vector3(-d/2, 0, 0)];
+      receiverPos = [new THREE.Vector3(d/2, 0, 0)];
+    } else {
+      const rowGap = Math.max(...donorRadii) + Math.max(...receiverRadii) + 1.6;
+      donorPos = rowPositions(donorRadii, -rowGap/2);
+      receiverPos = rowPositions(receiverRadii, rowGap/2);
+    }
+    const donorSlot = new Map(donors.map((idx,i) => [idx,i]));
+    const receiverSlot = new Map(receivers.map((idx,i) => [idx,i]));
+
+    const extents = [
+      ...donors.map((idx,i) => ({ p:donorPos[i], r:donorRadii[i] })),
+      ...receivers.map((idx,i) => ({ p:receiverPos[i], r:receiverRadii[i] })),
+    ];
+    const halfWidth = Math.max(...extents.map(o => Math.abs(o.p.x)+o.r)) + 0.3;
+    const halfHeight = Math.max(...extents.map(o => {
+      const labelScale = labelScaleFor(o.r) * ION_LABEL_BOOST;
+      return Math.abs(o.p.y) + o.r + labelScale*0.55 + 0.2;
+    }));
+    const frameSize = Math.max(halfWidth, halfHeight*1.05);
+    const dist = Math.max(4.5, (frameSize*1.08) / Math.tan((21*Math.PI)/180));
+    const camState = { theta:0.08, phi:1.3, radius:dist };
+    const camTarget = new THREE.Vector3(0, halfHeight*0.22, 0);
+    attachOrbitControls(canvasEl, camState, dist*0.45, dist*2, null);
+
+    let donorAtoms = [], receiverAtoms = [], donorLabels = [], receiverLabels = [];
+    let animState = 'idle', animStart = 0, travelers = [];
+    const DURATION_SETTLE = 700, DURATION_TRAVEL = 2600;
+
+    function setupAtoms(){
+      travelers.forEach(tr => { if (tr.mesh.parent === root) root.remove(tr.mesh); });
+      donorAtoms.forEach(a => root.remove(a.group));
+      receiverAtoms.forEach(a => root.remove(a.group));
+      donorLabels.forEach(l => root.remove(l));
+      receiverLabels.forEach(l => root.remove(l));
+
+      donorAtoms = donorEls.map((el,i) => {
+        const a = buildSimpleAtom(el, true);
+        a.group.position.copy(donorPos[i]);
+        root.add(a.group);
+        return a;
+      });
+      donorLabels = donorEls.map((el,i) => {
+        const scale = labelScaleFor(donorRadii[i]);
+        const l = makeLabelSprite(el, '#E8EDF8', 52, scale);
+        l.position.set(donorPos[i].x, labelYFor(donorPos[i], donorRadii[i], scale), 0);
+        root.add(l);
+        return l;
+      });
+      receiverAtoms = receiverEls.map((el,i) => {
+        const a = buildSimpleAtom(el, true);
+        a.group.position.copy(receiverPos[i]);
+        root.add(a.group);
+        return a;
+      });
+      receiverLabels = receiverEls.map((el,i) => {
+        const scale = labelScaleFor(receiverRadii[i]);
+        const l = makeLabelSprite(el, '#E8EDF8', 52, scale);
+        l.position.set(receiverPos[i].x, labelYFor(receiverPos[i], receiverRadii[i], scale), 0);
+        root.add(l);
+        return l;
+      });
+    }
+
+    function worldOf(pos, radius, angle){
+      return new THREE.Vector3(pos.x + radius*Math.cos(angle), pos.y + radius*Math.sin(angle), 0);
+    }
+
+    function beginTravel(){
+      const now = performance.now();
+      // Several edges can land on the same receiver ring (both irons feed
+      // the bridging oxygen in Fe2O3) — reserve slots up front rather than
+      // reading .electrons.length live, since arrive() doesn't push into it
+      // until each flight actually finishes.
+      const reserved = new Map();
+      function reserveSlot(outer){
+        const used = reserved.get(outer) || 0;
+        reserved.set(outer, used + 1);
+        const n = outer.electrons.length + used;
+        return (n / (n + 1)) * Math.PI * 2;
+      }
+      edges.forEach(edge => {
+        const donorAtom = donorAtoms[donorSlot.get(edge.donorIdx)];
+        const receiverAtom = receiverAtoms[receiverSlot.get(edge.receiverIdx)];
+        const donorP = donorPos[donorSlot.get(edge.donorIdx)];
+        const receiverP = receiverPos[receiverSlot.get(edge.receiverIdx)];
+        const receiverOuter = receiverAtom.shells[receiverAtom.shells.length-1];
+        for (let k = 0; k < edge.count; k++) {
+          const popped = popOuterElectron(donorAtom);
+          if (!popped) break;
+          const { shell: donorShell, electron: e } = popped;
+          const from = worldOf(donorP, donorShell.radius, e.angle0 + now*0.0006);
+          const toAngle = reserveSlot(receiverOuter);
+          const to = worldOf(receiverP, receiverOuter.radius, toAngle);
+          const control = new THREE.Vector3((from.x+to.x)/2, Math.max(from.y,to.y)+1.6, 0.8);
+          root.add(e.mesh);
+          e.mesh.position.copy(from);
+          travelers.push({ mesh:e.mesh, from, to, control, arrive(){
+            receiverAtom.group.add(e.mesh);
+            e.mesh.position.set(receiverOuter.radius*Math.cos(toAngle), receiverOuter.radius*Math.sin(toAngle), 0);
+            receiverOuter.electrons.push({ mesh:e.mesh, angle0:toAngle });
+          }});
+        }
+      });
+    }
+
+    function ionSup(charge){
+      if (charge === 0) return '';
+      const digit = { 1:'', 2:'²', 3:'³' }[Math.abs(charge)] ?? String(Math.abs(charge));
+      return digit + (charge > 0 ? '⁺' : '⁻');
+    }
+
+    function finishResult(){
+      // Sum charge per atom across ALL of its edges, not just one — Fe2O3's
+      // iron atoms each need their two separate O bonds (1 electron + 2
+      // electrons) added together to reach the real Fe3+.
+      const donorCharge = new Map(donors.map(idx => [idx, 0]));
+      const receiverCharge = new Map(receivers.map(idx => [idx, 0]));
+      edges.forEach(edge => {
+        donorCharge.set(edge.donorIdx, donorCharge.get(edge.donorIdx) + edge.count);
+        receiverCharge.set(edge.receiverIdx, receiverCharge.get(edge.receiverIdx) - edge.count);
+      });
+      donors.forEach((idx,i) => {
+        const charge = donorCharge.get(idx);
+        if (charge === 0) return;
+        const atom = donorAtoms[i];
+        const outer = atom.shells[atom.shells.length-1];
+        const ringNowEmpty = outer.electrons.length === 0;
+        if (ringNowEmpty) outer.ring.opacity = 0;
+        // If the outer ring emptied out but an inner one (iron's M-shell,
+        // still holding 13 of its 14) is still visible, the label should sit
+        // just outside THAT ring, not collapse all the way to the nucleus as
+        // if nothing were left.
+        const visibleShell = [...atom.shells].reverse().find(s => s.electrons.length > 0);
+        const effectiveRadius = visibleShell ? visibleShell.radius : 0.6;
+        root.remove(donorLabels[i]);
+        const scale = labelScaleFor(effectiveRadius) * ION_LABEL_BOOST;
+        donorLabels[i] = makeLabelSprite(donorEls[i] + ionSup(charge), '#F5A524', 60, scale);
+        donorLabels[i].position.set(donorPos[i].x, labelYFor(donorPos[i], effectiveRadius, scale), 0);
+        root.add(donorLabels[i]);
+      });
+      receivers.forEach((idx,i) => {
+        const charge = receiverCharge.get(idx);
+        if (charge === 0) return;
+        root.remove(receiverLabels[i]);
+        const scale = labelScaleFor(receiverRadii[i]) * ION_LABEL_BOOST;
+        receiverLabels[i] = makeLabelSprite(receiverEls[i] + ionSup(charge), '#5EEAD4', 60, scale);
+        receiverLabels[i].position.set(receiverPos[i].x, labelYFor(receiverPos[i], receiverRadii[i], scale), 0);
+        root.add(receiverLabels[i]);
+      });
+    }
+
+    function play(){
+      setupAtoms();
+      travelers = [];
+      animState = 'settle';
+      animStart = performance.now();
+    }
+    play();
+
+    function resize(){
+      const container = canvasEl.parentElement;
+      const w = container.clientWidth, h = container.clientHeight || w;
+      if (!w) return;
+      camera.aspect = w/h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+
+    function orbit(atom, now){
+      atom.shells.forEach(s => {
+        s.electrons.forEach(e => {
+          if (e.frozen) return;
+          const a = e.angle0 + now*0.0006;
+          e.mesh.position.set(s.radius*Math.cos(a), s.radius*Math.sin(a), 0);
+        });
+      });
+    }
+
+    return {
+      resize,
+      replay: play,
+      update(now){
+        donorAtoms.forEach(a => orbit(a, now));
+        receiverAtoms.forEach(a => orbit(a, now));
+
+        const t = now - animStart;
+        if (animState === 'settle' && t > DURATION_SETTLE) {
+          beginTravel();
+          animState = 'travel'; animStart = now;
+        } else if (animState === 'travel') {
+          const p = ease(Math.min(1, (now-animStart)/DURATION_TRAVEL));
+          travelers.forEach(tr => {
+            const a = new THREE.Vector3().lerpVectors(tr.from, tr.control, p);
+            const b = new THREE.Vector3().lerpVectors(tr.control, tr.to, p);
+            tr.mesh.position.lerpVectors(a, b, p);
+          });
+          if (p >= 1) { travelers.forEach(tr => tr.arrive()); finishResult(); animState = 'done'; }
+        }
+
+        camera.position.set(
+          camTarget.x + camState.radius*Math.sin(camState.phi)*Math.sin(camState.theta),
+          camTarget.y + camState.radius*Math.cos(camState.phi),
+          camTarget.z + camState.radius*Math.sin(camState.phi)*Math.cos(camState.theta)
+        );
+        camera.lookAt(camTarget);
+        renderer.render(scene, camera);
+      },
+      dispose(){ renderer.dispose(); },
+    };
+  }
+
+  function layoutPositions(n, cols, spacing){
+    const positions = [];
+    const totalCols = Math.min(n, cols);
+    for (let i=0;i<n;i++){
+      const col = i % cols, row = Math.floor(i/cols);
+      positions.push(new THREE.Vector3(
+        (col-(totalCols-1)/2)*spacing,
+        row*spacing*0.85,
+        (Math.random()-0.5)*0.4
+      ));
+    }
+    return positions;
+  }
+
+  function clearGroup(group){
+    while (group.children.length) {
+      const obj = group.children.pop();
+      obj.traverse(o => { if (o.userData && o.userData.disposeGeo && o.geometry) o.geometry.dispose(); });
+      group.remove(obj);
+    }
+  }
+
+  function addInstances(group, formula, count){
+    const positions = layoutPositions(count, 2, 1.7);
+    positions.forEach(pos => {
+      const mesh = buildMoleculeMesh(formula);
+      mesh.position.copy(pos);
+      mesh.userData.bob = { phase:Math.random()*Math.PI*2, speed:0.6+Math.random()*0.4, baseY:pos.y };
+      mesh.userData.spin = new THREE.Vector3(
+        (Math.random()-0.5), (Math.random()-0.5), (Math.random()-0.5)
+      ).normalize().multiplyScalar(0.15+Math.random()*0.2);
+      group.add(mesh);
+    });
+  }
+
+  const reactantGroupA = new THREE.Group();
+  const reactantGroupB = new THREE.Group();
+  labGroup.add(reactantGroupA, reactantGroupB);
+  let productGroups = [];
+
+  const ANCHOR_A = new THREE.Vector3(-6.4, 0.6, 0);
+  const ANCHOR_B = new THREE.Vector3(-2.8, 0.6, 0);
+  const ANCHOR_P1 = new THREE.Vector3(2.8, 0.6, 0);
+  const ANCHOR_P2 = new THREE.Vector3(6.4, 0.6, 0);
+  const ANCHOR_P_SINGLE = new THREE.Vector3(3.6, 0.6, 0);
+  const ZERO = new THREE.Vector3(0, 0.6, 0);
+
+  // Bond breaking / forming: bond cylinders run along their local Y axis, so
+  // scaling Y shrinks a bond to nothing at its midpoint (and grows it back).
+  function setBondScale(group, s){
+    group.traverse(o => { if (o.userData && o.userData.bondType) o.scale.y = s; });
+  }
+  // Reactants aren't erased once consumed — their atoms became the products —
+  // so they stay in place as semi-transparent (but still clickable) ghosts, a record of what went in.
+  const ghostMatCache = new Map();
+  function ghostOf(mat){
+    if (!ghostMatCache.has(mat)) {
+      const g = mat.clone();
+      g.transparent = true; g.opacity = 0.55;
+      ghostMatCache.set(mat, g);
+    }
+    return ghostMatCache.get(mat);
+  }
+  function ghostGroup(group){
+    group.traverse(o => { if (o.isMesh && !(o.userData && o.userData.bondType)) o.material = ghostOf(o.material); });
+  }
+  function bondCaption(formulas){
+    const list = Array.from(new Set(formulas.flatMap(bondList)));
+    return list.length ? list.join(', ') : 'none (these are single atoms)';
+  }
+  const clamp01 = x => Math.max(0, Math.min(1, x));
+
+  const activeBursts = [];
+  function spawnBurst(color){
+    const geo = new THREE.IcosahedronGeometry(0.5, 1);
+    const mat = new THREE.MeshBasicMaterial({ color, wireframe:true, transparent:true, opacity:0.9 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(0, 0.6, 0);
+    labGroup.add(mesh);
+    activeBursts.push({ mesh, start: performance.now() });
+  }
+
+  /* ---------------- Camera orbit (desktop / mobile) ---------------- */
+
+  // Target is offset from the arrow sprite's exact position on purpose — a target that
+  // coincides exactly with an object makes that object the pivot, so it looks frozen
+  // on screen while everything else visibly swings around it as you orbit. The offset
+  // is on Y only — offsetting Z instead puts the pivot at a different depth than the
+  // molecules (which all sit at z=0), and with a non-zero theta that mismatch makes
+  // the whole scene render off-center (parallax between the pivot depth and content depth).
+  // theta starts at 0 (dead-on, no rotation) rather than a stylistic angle — the chamber's
+  // content spans a wide x-range (reactants far left, products far right) and, before a
+  // reaction has products to balance the frame, any nonzero starting rotation skews the
+  // still-visible half off-center instead of keeping it symmetric around the target.
+  const cam = { theta:0, phi:1.08, radius:11.5, target:new THREE.Vector3(0,0.95,0) };
+  let dragging = false, lastX=0, lastY=0;
+
+  const MIN_RADIUS = 2, MAX_RADIUS = 45;
+  function zoomBy(factor){ cam.radius = Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, cam.radius*factor)); }
+
+  const activePointers = new Map();
+  let pinchStartDist = null, pinchStartRadius = null;
+  let tapCandidate = null; // tracks whether a press turns into a drag or stays a tap/click
+
+  // Panning slides the orbit target across the view so any molecule can be
+  // dragged to where you want it: Shift/right/middle-drag on desktop, or drag
+  // with two fingers on touch. Target stays within the chamber's footprint.
+  const PAN_LIMIT_X = 14, PAN_LIMIT_Y = 8, PAN_LIMIT_Z = 8;
+  let panning = false, panLastX = 0, panLastY = 0;
+  function panBy(dx, dy){
+    const perPx = 2*cam.radius*Math.tan((camera.fov*Math.PI/180)/2) / (viewport.clientHeight || 1);
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    cam.target.addScaledVector(right, -dx*perPx).addScaledVector(up, dy*perPx);
+    cam.target.x = Math.max(-PAN_LIMIT_X, Math.min(PAN_LIMIT_X, cam.target.x));
+    cam.target.y = Math.max(-PAN_LIMIT_Y, Math.min(PAN_LIMIT_Y, cam.target.y));
+    cam.target.z = Math.max(-PAN_LIMIT_Z, Math.min(PAN_LIMIT_Z, cam.target.z));
+  }
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  canvas.addEventListener('pointerdown', e => {
+    activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+    canvas.setPointerCapture(e.pointerId);
+    focusTween = null; // grabbing the view cancels any in-flight camera move
+    if (activePointers.size === 1) {
+      panning = e.shiftKey || e.button === 1 || e.button === 2;
+      panLastX = e.clientX; panLastY = e.clientY;
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+      tapCandidate = { id:e.pointerId, x:e.clientX, y:e.clientY, moved:false };
+      canvas.style.cursor = 'grabbing';
+    } else if (activePointers.size === 2) {
+      dragging = false;
+      tapCandidate = null;
+      const pts = Array.from(activePointers.values());
+      pinchStartDist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+      pinchStartRadius = cam.radius;
+      panLastX = (pts[0].x+pts[1].x)/2; panLastY = (pts[0].y+pts[1].y)/2;
+    }
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+
+    if (tapCandidate && tapCandidate.id === e.pointerId) {
+      if (Math.hypot(e.clientX-tapCandidate.x, e.clientY-tapCandidate.y) > 6) tapCandidate.moved = true;
+    }
+
+    if (activePointers.size === 2 && pinchStartDist) {
+      const pts = Array.from(activePointers.values());
+      const dist = Math.max(1, Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y));
+      cam.radius = Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, pinchStartRadius * (pinchStartDist/dist)));
+      // two-finger drag pans (the midpoint of the fingers is what moves)
+      const mx = (pts[0].x+pts[1].x)/2, my = (pts[0].y+pts[1].y)/2;
+      panBy(mx-panLastX, my-panLastY);
+      panLastX = mx; panLastY = my;
+      return;
+    }
+    if (!dragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    if (panning) { panBy(dx, dy); return; }
+    cam.theta -= dx * 0.006;
+    cam.phi = Math.min(1.5, Math.max(0.35, cam.phi - dy*0.006));
+  });
+  function releasePointer(e){
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinchStartDist = null;
+    if (activePointers.size === 0) { dragging = false; panning = false; canvas.style.cursor = 'grab'; }
+  }
+  canvas.addEventListener('pointerup', e => {
+    const isTap = tapCandidate && tapCandidate.id === e.pointerId && !tapCandidate.moved && activePointers.size === 1;
+    const tapX = tapCandidate ? tapCandidate.x : e.clientX;
+    const tapY = tapCandidate ? tapCandidate.y : e.clientY;
+    releasePointer(e);
+    tapCandidate = null;
+    if (isTap) handleCanvasTap(tapX, tapY);
+  });
+  canvas.addEventListener('pointercancel', e => { releasePointer(e); tapCandidate = null; });
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoomBy(Math.exp(e.deltaY * 0.0015));
+  }, { passive:false });
+
+  // Double-click / double-tap empty space to bring the whole chamber back into view.
+  // Also wired to the "center view" button, which is the discoverable way to recover
+  // after panning/rotating has pushed the reaction off to one side.
+  function centerView(){
+    // Centre on what's actually on screen: with a single product the row runs
+    // from the left reactant to ANCHOR_P_SINGLE, which is not symmetric about x=0.
+    const xs = [ANCHOR_A.x, ANCHOR_B.x, ...productGroups.map(g => g.userData.restAnchor.x)];
+    const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+    if (focusState) { focusState = null; moleculeCard.classList.remove('open'); }
+    focusTween = {
+      fromTarget: cam.target.clone(), toTarget: new THREE.Vector3(centerX,0.95,0),
+      fromRadius: cam.radius, toRadius: computeFitRadius(),
+      fromTheta: cam.theta, toTheta: 0,
+      fromPhi: cam.phi, toPhi: 1.08,
+      start: performance.now(), duration: 600,
+    };
+  }
+  canvas.addEventListener('dblclick', () => { if (!focusState) centerView(); });
+
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  document.getElementById('centerViewBtn').addEventListener('click', centerView);
+  zoomInBtn.addEventListener('click', () => zoomBy(0.82));
+  zoomOutBtn.addEventListener('click', () => zoomBy(1.22));
+
+  function updateOrbitCamera(){
+    camera.position.set(
+      cam.target.x + cam.radius*Math.sin(cam.phi)*Math.sin(cam.theta),
+      cam.target.y + cam.radius*Math.cos(cam.phi),
+      cam.target.z + cam.radius*Math.sin(cam.phi)*Math.cos(cam.theta)
+    );
+    camera.lookAt(cam.target);
+  }
+
+  /* ---------------- Click-to-inspect a molecule ---------------- */
+
+  const raycaster = new THREE.Raycaster();
+  const moleculeCard = document.getElementById('moleculeCard');
+
+  let focusState = null;   // saved camera state to return to
+  let focusTween = null;   // { fromTarget, toTarget, fromRadius, toRadius, fromTheta, toTheta, fromPhi, toPhi, start, duration }
+
+  // Generalizes "click a bond" to "show the whole bonding picture" — finds
+  // whichever atom in the clicked bond has the most bonds overall (the hub,
+  // e.g. oxygen in H2O) and every atom bonded to it (the spokes, e.g. both
+  // hydrogens), purely from the molecule's own atom/bond data. A molecule
+  // with only one bond total (NaCl, HCl, MgO) naturally reduces to hub+1
+  // spoke — the exact pairwise view this replaces — with no special-casing.
+  // Used for COVALENT bonds only — every covalent molecule in this chamber is
+  // a simple star (one central atom bonded to several others, e.g. C in CH4),
+  // so a single hub is always sufficient. Ionic compounds aren't always a
+  // star — see findIonicNetwork below.
+  function findHubAndSpokes(formula, atomIndexA, atomIndexB){
+    const def = MOLECULES[formula];
+    const bondCount = {};
+    def.bonds.forEach(([i,j]) => { bondCount[i] = (bondCount[i]||0)+1; bondCount[j] = (bondCount[j]||0)+1; });
+    const hubIndex = (bondCount[atomIndexB]||0) > (bondCount[atomIndexA]||0) ? atomIndexB : atomIndexA;
+    const spokes = def.bonds
+      .filter(([i,j]) => i === hubIndex || j === hubIndex)
+      .map(([i,j,type,count]) => ({ atomIndex: i === hubIndex ? j : i, bondType: type, count: count||1 }));
+    return { hubIndex, spokes };
+  }
+
+  // Used for IONIC bonds. Unlike covalent molecules, an ionic compound can
+  // have more than one donor sharing a receiver (or vice versa) — Fe2O3's
+  // bridging oxygen sits between BOTH iron atoms, so clicking any one Fe-O
+  // bond needs to pull in the whole connected ionic network (both Fe, all 3
+  // O), not just the one hub atom that bond happened to be clicked on.
+  // Otherwise that oxygen would only ever be shown receiving from one iron,
+  // never both, and the charges wouldn't add up to the real Fe3+/O2-.
+  function findIonicNetwork(formula, atomIndexA, atomIndexB){
+    const def = MOLECULES[formula];
+    const ionicBonds = def.bonds.filter(b => b[2] === 'ionic');
+    const visited = new Set([atomIndexA, atomIndexB]);
+    const queue = [atomIndexA, atomIndexB];
+    while (queue.length) {
+      const cur = queue.pop();
+      ionicBonds.forEach(([i,j]) => {
+        if (i === cur && !visited.has(j)) { visited.add(j); queue.push(j); }
+        if (j === cur && !visited.has(i)) { visited.add(i); queue.push(i); }
+      });
+    }
+    const edges = ionicBonds
+      .filter(([i,j]) => visited.has(i) && visited.has(j))
+      .map(([i,j,,count]) => {
+        // Donor = lower electronegativity, regardless of which index the
+        // bond tuple happened to list first.
+        const elI = def.atoms[i].el, elJ = def.atoms[j].el;
+        const [donorIdx, receiverIdx] = ELEMENTS[elI].en <= ELEMENTS[elJ].en ? [i,j] : [j,i];
+        return { donorIdx, receiverIdx, count: count||1 };
+      });
+    const donors = Array.from(new Set(edges.map(e => e.donorIdx)));
+    const receivers = Array.from(new Set(edges.map(e => e.receiverIdx)));
+    return { donors, receivers, edges };
+  }
+
+  function bondInfo(bondType, elA, elB, order){
+    const a = ELEMENTS[elA], b = ELEMENTS[elB];
+    const diff = Math.abs(a.en - b.en).toFixed(2);
+    const key = [elA, elB].slice().sort().join('-');
+    const n = order || 1;
+    const pairWord = n === 1 ? 'a single pair' : n === 2 ? 'two pairs' : 'three pairs';
+    const bondWord = n === 1 ? 'a single bond' : n === 2 ? 'a double bond' : 'a triple bond';
+    const bespoke = {
+      'Cl-Na': `Sodium (EN ${ELEMENTS.Na.en}) barely holds onto its lone valence electron; chlorine (EN ${ELEMENTS.Cl.en}) pulls hard for one more to fill its own shell. That gap (${diff}) is wide enough that sodium simply gives its electron away rather than sharing it — forming Na⁺ and Cl⁻ ions held together by electrostatic attraction, not a shared pair.`,
+      'H-O': `Oxygen (EN ${ELEMENTS.O.en}) pulls harder on the shared electron pair than hydrogen (EN ${ELEMENTS.H.en}) does. The gap (${diff}) isn't wide enough to transfer the electron outright, but it's enough to make this bond polar — electrons spend more time near oxygen, giving it a slight negative charge and hydrogen a slight positive one.`,
+    };
+    const electronWord = n === 1 ? 'an electron' : n === 2 ? 'two electrons' : `${n} electrons`;
+    const generic = bondType === 'ionic'
+      ? `The electronegativity difference between ${ATOMIC_NAMES[elA]} (${a.en}) and ${ATOMIC_NAMES[elB]} (${b.en}) is ${diff} — large enough that one atom transfers ${electronWord} to the other rather than sharing them, forming oppositely charged ions held together by electrostatic attraction.`
+      : `${ATOMIC_NAMES[elA]} (${a.en}) and ${ATOMIC_NAMES[elB]} (${b.en}) have an electronegativity difference of just ${diff} — small enough that both atoms share electrons instead of one taking them outright. Here they share ${pairWord} of electrons, forming ${bondWord}.`;
+    return {
+      title: `${elA}–${elB} bond`,
+      kind: bondType === 'ionic' ? 'Ionic bond' : (n === 1 ? 'Covalent bond' : n === 2 ? 'Covalent bond (double)' : 'Covalent bond (triple)'),
+      diff,
+      body: bespoke[key] || generic,
+    };
+  }
+
+  function handleCanvasTap(clientX, clientY){
+    if (current && current.phase === 'reacting') return;
+    const rect = canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX-rect.left)/rect.width)*2 - 1,
+      -((clientY-rect.top)/rect.height)*2 + 1
+    );
+    raycaster.setFromCamera(ndc, camera);
+    // Reactants stay tappable after the reaction (they're just ghosted), so you can still inspect them.
+    const targets = [reactantGroupA, reactantGroupB, ...productGroups].filter(g => g.visible);
+    const hits = raycaster.intersectObjects(targets, true);
+    if (!hits.length) return;
+    const bondHit = hits.find(h => h.object.userData && h.object.userData.bondType);
+    let obj = (bondHit || hits[0]).object;
+    while (obj && !(obj.userData && obj.userData.formula)) obj = obj.parent;
+    if (!obj) return;
+    enterFocus(obj);
+    if (bondHit) showBondCard(bondHit.object.userData.bondType, bondHit.object.userData.elementA, bondHit.object.userData.elementB, bondHit.object.userData.order);
+  }
+
+  let cardFormula = null;
+
+  function oxidationChips(formula){
+    return Object.entries(oxidationBySymbol(formula))
+      .map(([el, n]) => `<span class="chip" title="Oxidation state of ${ATOMIC_NAMES[el]} in this substance">${el} ${formatOxidation(n)}</span>`).join('');
+  }
+
+  function showMoleculeCard(formula){
+    cardFormula = formula;
+    setAssistantContext({ molecule:formula, bond:null });
+    const info = MOLECULE_INFO[formula];
+    const hasBonds = MOLECULES[formula].bonds.length > 0;
+    moleculeCard.innerHTML = `
+      <button class="molecule-card-close" type="button" id="moleculeCardClose">← Back to chamber</button>
+      <div class="molecule-card-formula">${toSubscript(formula)}</div>
+      <div class="molecule-card-name">${info.name}</div>
+      <div class="molecule-card-chips">
+        <span class="chip">${info.category}</span>
+        <span class="chip">${bondTypeLabel(formula)}</span>
+      </div>
+      <div class="molecule-card-chips" aria-label="Oxidation states">${oxidationChips(formula)}</div>
+      <div class="molecule-card-stat"><span>Molar mass</span><strong>${molarMass(formula).toFixed(2)} g/mol</strong></div>
+      <p class="molecule-card-fact">${info.fact}</p>
+      ${hasBonds ? `<p class="molecule-card-hint">Click a bond in the model to see why it's ${bondTypeLabel(formula).toLowerCase()}.</p>` : ''}
+      <button class="btn btn-accent mc-learn-more" type="button" id="mcLearnMoreBtn">Learn more →</button>`;
+    document.getElementById('moleculeCardClose').addEventListener('click', exitFocus);
+    document.getElementById('mcLearnMoreBtn').addEventListener('click', () => { if (cardFormula) openDetailView(cardFormula); });
+    moleculeCard.classList.add('open');
+  }
+
+  function showBondCard(bondType, elA, elB, order){
+    setAssistantContext({ bond:{ type:bondType, elA, elB, order:order||1 } });
+    const info = bondInfo(bondType, elA, elB, order);
+    moleculeCard.innerHTML = `
+      <button class="molecule-card-close" type="button" id="bondBackBtn">← ${cardFormula ? toSubscript(cardFormula) : ''} overview</button>
+      <div class="molecule-card-formula">${info.title}</div>
+      <div class="molecule-card-name">${info.kind}</div>
+      <div class="molecule-card-chips">
+        <span class="chip">${elA} EN ${ELEMENTS[elA].en}</span>
+        <span class="chip">${elB} EN ${ELEMENTS[elB].en}</span>
+      </div>
+      <div class="molecule-card-chips">
+        <span class="chip">${elA} valence e⁻ ${ELEMENTS[elA].valence}</span>
+        <span class="chip">${elB} valence e⁻ ${ELEMENTS[elB].valence}</span>
+      </div>
+      <div class="molecule-card-stat"><span>EN difference</span><strong>${info.diff}</strong></div>
+      <p class="molecule-card-fact">${info.body}</p>`;
+    document.getElementById('bondBackBtn').addEventListener('click', () => showMoleculeCard(cardFormula));
+    moleculeCard.classList.add('open');
+  }
+
+  function enterFocus(moleculeGroup){
+    hidePanel(); // clicking a molecule wants the full view, not a panel in the way
+    const worldPos = moleculeGroup.getWorldPosition(new THREE.Vector3());
+    if (!focusState) {
+      focusState = { theta:cam.theta, phi:cam.phi, radius:cam.radius, target:cam.target.clone() };
+    }
+    const toTarget = worldPos.clone();
+    if (viewport.clientWidth <= 700) toTarget.y -= 0.9; // lift the molecule above the docked card
+    focusTween = {
+      fromTarget: cam.target.clone(), toTarget,
+      fromRadius: cam.radius, toRadius: 3,
+      fromTheta: cam.theta, toTheta: cam.theta,
+      fromPhi: cam.phi, toPhi: cam.phi,
+      start: performance.now(), duration: 600,
+    };
+    showMoleculeCard(moleculeGroup.userData.formula);
+  }
+
+  function exitFocus(){
+    if (!focusState) return;
+    focusTween = {
+      fromTarget: cam.target.clone(), toTarget: focusState.target.clone(),
+      fromRadius: cam.radius, toRadius: focusState.radius,
+      fromTheta: cam.theta, toTheta: focusState.theta,
+      fromPhi: cam.phi, toPhi: focusState.phi,
+      start: performance.now(), duration: 550,
+    };
+    focusState = null;
+    moleculeCard.classList.remove('open');
+    setAssistantContext({ molecule:null, bond:null });
+  }
+
+  /* ---------------- "Learn more" detail view (Bohr models) ---------------- */
+  // Opens on top of the chamber without touching cam/focusState/moleculeCard —
+  // closing it just reveals whatever was underneath, exactly as it was.
+
+  const detailView = document.getElementById('detailView');
+  const detailBackBtn = document.getElementById('detailBackBtn');
+  const detailEyebrow = document.getElementById('detailEyebrow');
+  const detailFormula = document.getElementById('detailFormula');
+  const detailCanvas = document.getElementById('detailCanvas');
+  const atomTabs = document.getElementById('atomTabs');
+  const particleCounter = document.getElementById('particleCounter');
+  const atomInfo = document.getElementById('atomInfo');
+  const accuracyInfoBtn = document.getElementById('accuracyInfoBtn');
+  const accuracyPopover = document.getElementById('accuracyPopover');
+  accuracyInfoBtn.addEventListener('click', () => accuracyPopover.classList.toggle('open'));
+  document.addEventListener('click', e => {
+    if (accuracyPopover.classList.contains('open') && !accuracyPopover.contains(e.target) && e.target !== accuracyInfoBtn) {
+      accuracyPopover.classList.remove('open');
+    }
+  });
+
+  const moleculeLocator = document.getElementById('moleculeLocator');
+  const moleculeLocatorCanvas = document.getElementById('moleculeLocatorCanvas');
+  const moleculeLocatorLabel = document.getElementById('moleculeLocatorLabel');
+
+  let activeAtomViewer = null;
+  let activeLocator = null;
+  let activeMoleculeViewer = null;
+  let activeBondStory = null;
+  let detailCounts = {};
+  let currentFormula = null;
+  let currentSymbol = null;
+
+  function disposeActiveAtomViewer(){
+    if (activeAtomViewer) activeAtomViewer.dispose();
+    activeAtomViewer = null;
+  }
+
+  function disposeActiveLocator(){
+    if (activeLocator) activeLocator.dispose();
+    activeLocator = null;
+  }
+
+  function disposeActiveMoleculeViewer(){
+    if (activeMoleculeViewer) activeMoleculeViewer.dispose();
+    activeMoleculeViewer = null;
+  }
+
+  function disposeActiveBondStory(){
+    if (activeBondStory) activeBondStory.dispose();
+    activeBondStory = null;
+  }
+
+  function ensureLocatorVisible(){
+    const qualifies = MOLECULES[currentFormula].atoms.length > 1;
+    moleculeLocator.hidden = !qualifies;
+    if (!qualifies) { disposeActiveLocator(); return; }
+    if (!activeLocator) {
+      moleculeLocatorLabel.innerHTML = toSubscript(currentFormula);
+      requestAnimationFrame(() => {
+        activeLocator = buildMoleculeLocator(moleculeLocatorCanvas, currentFormula, symbol => showAtom(symbol));
+        activeLocator.resize();
+        activeLocator.setHighlight(currentSymbol);
+      });
+    }
+  }
+
+  // Bespoke copy for the two atoms called out explicitly in the design spec;
+  // every other element in ELEMENTS still works via the generic templates.
+  function particleInfo(symbol, type, isGhost, extra){
+    const el = ELEMENTS[symbol];
+    const name = ATOMIC_NAMES[symbol];
+    const massNumber = el.number + el.neutrons;
+
+    if (type === 'shell') {
+      const { letter, shellIndex, isValence, electronCount } = extra;
+      const body = isValence
+        ? `This is ${name.toLowerCase()}'s valence shell — its outermost occupied energy level. The ${electronCount} electron${electronCount===1?'':'s'} here are ${name.toLowerCase()}'s valence electrons: the ones actually involved when it forms bonds. Everything about how ${name.toLowerCase()} reacts comes down to these.`
+        : `An inner, filled shell. Its ${electronCount} electron${electronCount===1?'':'s'} are held close to the nucleus and shielded from other atoms — they don't participate in bonding the way valence electrons do.`;
+      return { title:`${letter} shell — energy level ${shellIndex+1}`, chargeLabel:`${electronCount}e⁻`, chargeClass:'charge-electron',
+        body, explore:null };
+    }
+    if (type === 'proton') {
+      const bespoke = {
+        H:`This single proton is the entire reason this atom is hydrogen — every atom with exactly one proton is hydrogen, no matter how many neutrons or electrons it has.`,
+        O:`Oxygen has 8 protons — its atomic number. That count alone makes this atom oxygen; change it by even one and you'd have a different element (nitrogen with 7, or fluorine with 9).`,
+      };
+      return { title:'Proton (p⁺)', chargeLabel:'+1', chargeClass:'charge-proton',
+        body: bespoke[symbol] || `${name} has ${el.number} protons — its atomic number, and the one property that defines it as ${name}. Change that count and you'd have a different element entirely.`,
+        explore:{ label:'Explore inside this proton →', target:'proton' } };
+    }
+    if (type === 'neutron') {
+      if (isGhost) {
+        return { title:'No neutron here', chargeLabel:'0', chargeClass:'charge-neutron',
+          body:`Hydrogen-1, the common isotope, has zero neutrons — the only element that can exist without one. Add a neutron and you'd have deuterium, a heavier isotope still recognized as hydrogen.`,
+          explore:null };
+      }
+      const bespoke = { O:`This is oxygen-16, the most abundant isotope, with 8 neutrons. Rarer isotopes like oxygen-18 carry more neutrons but are still chemically oxygen.` };
+      return { title:'Neutron (n⁰)', chargeLabel:'0', chargeClass:'charge-neutron',
+        body: bespoke[symbol] || `This is the ${symbol}-${massNumber} isotope, carrying ${el.neutrons} neutrons. Other isotopes of ${name} would have more or fewer but remain the same element.`,
+        explore:{ label:'Explore inside this neutron →', target:'neutron' } };
+    }
+    // electron
+    const bespoke = {
+      H:`Neutral hydrogen has exactly one electron. It's this lone electron that hydrogen shares or gives up when it bonds — the basis of the H in H₂O, HCl, and every hydrocarbon.`,
+      O:`Neutral oxygen has eight electrons: two filling the inner shell, six in the outer shell. Those six outer electrons are why oxygen so readily forms two bonds — as it does twice in H₂O.`,
+    };
+    return { title:'Electron (e⁻)', chargeLabel:'−1', chargeClass:'charge-electron',
+      body: bespoke[symbol] || `Neutral ${name} has ${el.number} electrons, arranged ${el.shells.join('-')} across its shells. Electrons like this one govern how ${name} bonds with other atoms.`,
+      explore:null };
+  }
+
+  function quarkInfo(nucleonType){
+    return nucleonType === 'proton'
+      ? { title:'Proton — uud', body:'2 up quarks (+2/3 each) + 1 down quark (−1/3) = +1 net charge. This is as deep as physics has ever measured — quarks show no sign of having smaller parts inside them.' }
+      : { title:'Neutron — udd', body:'1 up quark (+2/3) + 2 down quarks (−1/3 each) = 0 net charge.' };
+  }
+
+  function renderAtomInfo(symbol){
+    const el = ELEMENTS[symbol];
+    const molInfo = MOLECULE_INFO[currentFormula];
+    atomInfo.innerHTML = `
+      <div class="atom-info-head">
+        <span class="atom-symbol">${symbol}</span>
+        <span class="atom-name">${ATOMIC_NAMES[symbol]}</span>
+      </div>
+      <dl class="atom-stats">
+        <dt>Atomic number</dt><dd>${el.number}</dd>
+        <dt>Shells</dt><dd>${el.shells.join(', ')}</dd>
+        <dt>Configuration</dt><dd>${el.config}</dd>
+        <dt>Valence electrons</dt><dd>${el.valence}</dd>
+        <dt>Electronegativity</dt><dd>${el.en}</dd>
+        <dt>Common oxidation states</dt><dd>${el.oxidation.map(formatOxidation).join(', ')}</dd>
+        <dt>Oxidation state here</dt><dd>${formatOxidation(oxidationBySymbol(currentFormula)[symbol])}</dd>
+        <dt>In this molecule</dt><dd>×${detailCounts[symbol]}</dd>
+      </dl>
+      <p class="particle-body">Click any electron, proton, neutron, or shell ring to learn what it does.</p>
+      <div class="detail-molecule-context">
+        <span class="chip">${molInfo.category}</span>
+        <span class="chip">${bondTypeLabel(currentFormula)}</span>
+        <div class="detail-mini-stat"><span>Molar mass</span><strong>${molarMass(currentFormula).toFixed(2)} g/mol</strong></div>
+      </div>
+      <p class="detail-fact">${molInfo.fact}</p>`;
+  }
+
+  function renderParticlePanel(symbol, type, isGhost, extra){
+    const info = particleInfo(symbol, type, isGhost, extra);
+    atomInfo.innerHTML = `
+      <button class="particle-back" type="button" id="particleBackBtn">← ${symbol} overview</button>
+      <div class="particle-title-row">
+        <span class="particle-title">${info.title}</span>
+        <span class="particle-charge ${info.chargeClass}">${info.chargeLabel}</span>
+      </div>
+      <p class="particle-body">${info.body}</p>
+      ${info.explore ? `<button class="explore-inside-btn" type="button" id="exploreInsideBtn">${info.explore.label}</button>` : ''}`;
+    document.getElementById('particleBackBtn').addEventListener('click', () => activeAtomViewer && activeAtomViewer.clearSelection());
+    if (info.explore) {
+      document.getElementById('exploreInsideBtn').addEventListener('click', () => activeAtomViewer && activeAtomViewer.enterQuark(info.explore.target));
+    }
+  }
+
+  function renderQuarkPanel(nucleonType){
+    const info = quarkInfo(nucleonType);
+    atomInfo.innerHTML = `
+      <button class="particle-back" type="button" id="quarkBackBtn">← Back to ${nucleonType}</button>
+      <div class="particle-title-row"><span class="particle-title">${info.title}</span></div>
+      <p class="particle-body">${info.body}</p>
+      <div class="quark-legend">
+        <span><i style="background:#5EEAD4"></i> up quark (+2/3)</span>
+        <span><i style="background:#F5A524"></i> down quark (−1/3)</span>
+      </div>`;
+    document.getElementById('quarkBackBtn').addEventListener('click', () => activeAtomViewer && activeAtomViewer.exitQuark());
+  }
+
+  function onAtomStateChange(symbol, state){
+    if (state.mode === 'particle') {
+      setAssistantContext({
+        element:symbol, particle:state.type,
+        shell: state.type === 'shell'
+          ? { letter:state.letter, shellIndex:state.shellIndex, isValence:!!state.isValence, electronCount:state.electronCount }
+          : null,
+      });
+      renderParticlePanel(symbol, state.type, state.isGhost, state);
+    } else if (state.mode === 'quark') {
+      setAssistantContext({ particle:state.nucleonType, shell:null });
+      renderQuarkPanel(state.nucleonType);
+    } else {
+      setAssistantContext({ particle:null, shell:null });
+      renderAtomInfo(symbol);
+    }
+  }
+
+  function renderMoleculeOverviewPanel(){
+    const formula = currentFormula;
+    const info = MOLECULE_INFO[formula];
+    const hasBonds = MOLECULES[formula].bonds.length > 0;
+    atomInfo.innerHTML = `
+      <div class="atom-info-head">
+        <span class="atom-symbol">${toSubscript(formula)}</span>
+        <span class="atom-name">${info.name}</span>
+      </div>
+      <div class="detail-molecule-context" style="border-top:none; padding-top:0;">
+        <span class="chip">${info.category}</span>
+        <span class="chip">${bondTypeLabel(formula)}</span>
+        <div class="detail-mini-stat"><span>Molar mass</span><strong>${molarMass(formula).toFixed(2)} g/mol</strong></div>
+      </div>
+      <div class="detail-molecule-context" style="border-top:none; padding-top:0;" aria-label="Oxidation states">${oxidationChips(formula)}</div>
+      <p class="detail-fact">${info.fact}</p>
+      <p class="particle-body">${hasBonds
+        ? `Click a bond to see why it's ${bondTypeLabel(formula).toLowerCase()}, or click an atom to explore it up close.`
+        : 'Click the atom to explore it up close.'}</p>`;
+  }
+
+  function renderMoleculeBondPanel(bondType, elA, elB, order){
+    const info = bondInfo(bondType, elA, elB, order);
+    const actionLabel = bondType === 'ionic' ? '↻ Replay the transfer' : '↻ Replay the sharing';
+    atomInfo.innerHTML = `
+      <button class="particle-back" type="button" id="moleculeBondBackBtn">← molecule overview</button>
+      <div class="particle-title-row"><span class="particle-title">${info.title}</span></div>
+      <div class="molecule-card-chips">
+        <span class="chip">${elA} EN ${ELEMENTS[elA].en}</span>
+        <span class="chip">${elB} EN ${ELEMENTS[elB].en}</span>
+      </div>
+      <p class="particle-body">${info.body}</p>
+      <button class="explore-inside-btn" type="button" id="bondReplayBtn">${actionLabel}</button>`;
+    document.getElementById('moleculeBondBackBtn').addEventListener('click', () => {
+      disposeActiveBondStory();
+      enterMoleculeMode();
+    });
+    document.getElementById('bondReplayBtn').addEventListener('click', () => activeBondStory && activeBondStory.replay());
+  }
+
+  function enterBondStory(bondType, elA, elB, atomIndexA, atomIndexB){
+    disposeActiveMoleculeViewer();
+    const bondDef = MOLECULES[currentFormula].bonds.find(([i,j]) =>
+      (i === atomIndexA && j === atomIndexB) || (i === atomIndexB && j === atomIndexA));
+    const bondOrder = bondDef ? (bondDef[3]||1) : 1;
+    renderMoleculeBondPanel(bondType, elA, elB, bondOrder);
+    setAssistantContext({ bond:{ type:bondType, elA, elB, order:bondOrder }, element:null, shell:null, particle:null });
+    if (bondType === 'ionic') {
+      // Ionic compounds aren't always a single-donor star (Fe2O3 has two iron
+      // donors sharing a bridging oxygen) — pull in the whole connected ionic
+      // network, not just the one hub the clicked bond happens to touch.
+      const { donors, receivers, edges } = findIonicNetwork(currentFormula, atomIndexA, atomIndexB);
+      requestAnimationFrame(() => {
+        activeBondStory = buildIonicNetworkScene(detailCanvas, currentFormula, donors, receivers, edges);
+        activeBondStory.resize();
+      });
+      return;
+    }
+    const { hubIndex, spokes } = findHubAndSpokes(currentFormula, atomIndexA, atomIndexB);
+    requestAnimationFrame(() => {
+      activeBondStory = buildBondStoryScene(detailCanvas, currentFormula, hubIndex, spokes);
+      activeBondStory.resize();
+    });
+  }
+
+  function showAtom(symbol){
+    disposeActiveAtomViewer();
+    disposeActiveMoleculeViewer();
+    disposeActiveBondStory();
+    currentSymbol = symbol;
+    setAssistantContext({ element:symbol, shell:null, particle:null, bond:null });
+    const el = ELEMENTS[symbol];
+    particleCounter.innerHTML =
+      `<span><b class="dot-p">${el.number}</b> protons</span> · <span><b class="dot-n">${el.neutrons}</b> neutrons</span> · <span><b class="dot-e">${el.number}</b> electrons</span>`;
+    renderAtomInfo(symbol);
+    atomTabs.querySelectorAll('.atom-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.symbol === symbol);
+    });
+    if (activeLocator) activeLocator.setHighlight(symbol);
+    ensureLocatorVisible();
+    // The viewport must be laid out (non-zero size) before sizing the renderer.
+    requestAnimationFrame(() => {
+      activeAtomViewer = buildBohrScene(detailCanvas, symbol, state => onAtomStateChange(symbol, state));
+      activeAtomViewer.resize();
+    });
+  }
+
+  function enterMoleculeMode(){
+    disposeActiveAtomViewer();
+    disposeActiveLocator();
+    disposeActiveBondStory();
+    moleculeLocator.hidden = true;
+    particleCounter.innerHTML = '';
+    setAssistantContext({ element:null, shell:null, particle:null, bond:null });
+    atomTabs.querySelectorAll('.atom-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.symbol === '__molecule__');
+    });
+    renderMoleculeOverviewPanel();
+    requestAnimationFrame(() => {
+      activeMoleculeViewer = buildMoleculeSceneFull(detailCanvas, currentFormula, {
+        onSelectAtom: symbol => showAtom(symbol),
+        onSelectBond: (bondType, elA, elB, atomIndexA, atomIndexB) => enterBondStory(bondType, elA, elB, atomIndexA, atomIndexB),
+      });
+      activeMoleculeViewer.resize();
+    });
+  }
+
+  function openDetailView(formula){
+    const info = MOLECULE_INFO[formula];
+    currentFormula = formula;
+    detailCounts = parseFormula(formula);
+    detailEyebrow.textContent = info.category === 'Element' ? 'ELEMENT' : 'COMPOUND';
+    detailFormula.innerHTML = toSubscript(formula);
+
+    const symbols = Object.keys(detailCounts);
+    const hasMultipleAtoms = MOLECULES[formula].atoms.length > 1;
+    atomTabs.hidden = symbols.length < 2 && !hasMultipleAtoms;
+    atomTabs.innerHTML =
+      symbols.map(symbol => `<button class="atom-tab" type="button" data-symbol="${symbol}">${symbol}</button>`).join('') +
+      (hasMultipleAtoms ? `<button class="atom-tab" type="button" data-symbol="__molecule__">🧬 Molecule</button>` : '');
+    atomTabs.querySelectorAll('.atom-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.symbol === '__molecule__') enterMoleculeMode();
+        else showAtom(btn.dataset.symbol);
+      });
+    });
+
+    detailView.classList.add('open');
+    detailView.setAttribute('aria-hidden', 'false');
+    assistantEnterDetail(formula);
+    showAtom(symbols[0]);
+  }
+
+  function closeDetailView(){
+    detailView.classList.remove('open');
+    detailView.setAttribute('aria-hidden', 'true');
+    assistantLeaveDetail();
+    disposeActiveAtomViewer();
+    disposeActiveLocator();
+    disposeActiveMoleculeViewer();
+    disposeActiveBondStory();
+  }
+
+  detailBackBtn.addEventListener('click', closeDetailView);
+
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (ionPanel.classList.contains('open')) { closeIon(); return; }
+    if (detailView.classList.contains('open')) closeDetailView();
+    else exitFocus();
+  });
+
+  function updateFocusTween(now){
+    if (!focusTween) return;
+    const p = ease(Math.min(1, (now-focusTween.start)/focusTween.duration));
+    cam.target.lerpVectors(focusTween.fromTarget, focusTween.toTarget, p);
+    cam.radius = focusTween.fromRadius + (focusTween.toRadius-focusTween.fromRadius)*p;
+    cam.theta = focusTween.fromTheta + (focusTween.toTheta-focusTween.fromTheta)*p;
+    cam.phi = focusTween.fromPhi + (focusTween.toPhi-focusTween.fromPhi)*p;
+    if (p >= 1) focusTween = null;
+  }
+
+  /* ---------------- WebXR ---------------- */
+
+  const vrBtn = document.getElementById('vrBtn');
+  const vrStatus = document.getElementById('vrStatus');
+
+  async function checkXRSupport(){
+    if (navigator.xr && navigator.xr.isSessionSupported) {
+      try {
+        const supported = await navigator.xr.isSessionSupported('immersive-vr');
+        vrBtn.hidden = !supported;
+      } catch(e) { vrBtn.hidden = true; }
+    } else {
+      vrBtn.hidden = true;
+    }
+  }
+  checkXRSupport();
+
+  vrBtn.addEventListener('click', async () => {
+    try {
+      const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures:['local-floor'] });
+      renderer.xr.setReferenceSpaceType('local-floor');
+      await renderer.xr.setSession(session);
+      vrStatus.hidden = true;
+    } catch (err) {
+      vrStatus.hidden = false;
+      vrStatus.textContent = 'VR unavailable here — open the published link directly on a headset browser.';
+    }
+  });
+
+  renderer.xr.addEventListener('sessionstart', () => { labGroup.position.set(0, 0.9, -2.4); });
+  renderer.xr.addEventListener('sessionend', () => { labGroup.position.set(0, 0, 0); });
+
+  /* ---------------- UI wiring ---------------- */
+
+  const selA = document.getElementById('selA');
+  const selB = document.getElementById('selB');
+  const equationEl = document.getElementById('equation');
+  const balanceBadge = document.getElementById('balanceBadge');
+  const reactionTypeEl = document.getElementById('reactionType');
+  const reactionNoteEl = document.getElementById('reactionNote');
+  const balanceBtn = document.getElementById('balanceBtn');
+  const reactBtn = document.getElementById('reactBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  REACTANT_OPTIONS.forEach(f => {
+    const label = `${toSubscript(f)} — ${ELEMENT_NAMES[f]}`;
+    [selA, selB].forEach(sel => {
+      const opt = document.createElement('option');
+      opt.value = f; opt.textContent = label;
+      sel.appendChild(opt.cloneNode(true));
+    });
+  });
+  selA.value = 'H2';
+  selB.value = 'O2';
+
+  let current = null; // { entry, coeffs, phase }
+
+  function renderEquationSkeleton(entry, coeffs){
+    const parts = [];
+    const formulas = [entry.a, entry.b, ...entry.products];
+    const nReactants = 2;
+    formulas.forEach((f, i) => {
+      const c = coeffs ? coeffs[i] : 1;
+      const showCoef = c > 1;
+      parts.push(`<span class="coef ${showCoef?'':'hidden-one'}">${c}</span><span class="formula">${toSubscript(f)}</span>`);
+      if (i < nReactants-1) parts.push(`<span class="sym">+</span>`);
+      if (i === nReactants-1) parts.push(`<span class="sym arrow">→</span>`);
+      else if (i > nReactants-1 && i < formulas.length-1) parts.push(`<span class="sym">+</span>`);
+    });
+    equationEl.innerHTML = parts.join('');
+    equationEl.classList.toggle('balanced', !!coeffs);
+  }
+
+  function popCoefficients(){
+    equationEl.querySelectorAll('.coef').forEach(el => {
+      el.classList.remove('pop');
+      void el.offsetWidth;
+      el.classList.add('pop');
+    });
+  }
+
+  function selectReaction(){
+    exitFocus();
+    // Dragging to orbit changes cam.theta/phi and nothing else ever resets it —
+    // picking a new reactant pair (including via Reset) is a natural "fresh
+    // start" point, so straighten the view back to dead-on here rather than
+    // carrying forward whatever angle browsing left it at. exitFocus() may
+    // have just queued its own tween (if a molecule was focused) — cancel it
+    // so it doesn't overwrite this reset on the next animation frame.
+    focusTween = null;
+    cam.theta = 0; cam.phi = 1.08;
+    cam.target.set(0, 0.95, 0);
+    fitChamberRadius();
+    const a = selA.value, b = selB.value;
+    clearGroup(reactantGroupA);
+    clearGroup(reactantGroupB);
+    productGroups.forEach(g => { clearGroup(g); labGroup.remove(g); });
+    productGroups = [];
+    reactantGroupA.visible = true; reactantGroupB.visible = true;
+    reactantGroupA.scale.set(1,1,1); reactantGroupB.scale.set(1,1,1);
+    reactantGroupA.position.copy(ANCHOR_A); reactantGroupB.position.copy(ANCHOR_B);
+
+    const entry = findReaction(a, b);
+    setAssistantContext({ reaction:entry, molecule:null, bond:null, element:null, shell:null, particle:null });
+    resetBtn.hidden = true;
+    reactBtn.disabled = true;
+
+    signArrow.visible = !!entry;
+    signPlusProducts.visible = false;
+
+    if (!entry) {
+      current = null;
+      equationEl.innerHTML = `<span class="sym">No recorded reaction between ${toSubscript(a)} and ${toSubscript(b)} — try another pair.</span>`;
+      equationEl.classList.remove('balanced');
+      balanceBadge.textContent = '—';
+      balanceBadge.className = 'badge badge-amber';
+      reactionTypeEl.textContent = '—';
+      reactionNoteEl.textContent = 'Pick a different combination.';
+      balanceBtn.disabled = true;
+      addInstances(reactantGroupA, a, 1);
+      addInstances(reactantGroupB, b, 1);
+      return;
+    }
+
+    current = { entry, coeffs:null, phase:'idle' };
+    balanceBtn.disabled = false;
+    balanceBadge.textContent = 'unbalanced';
+    balanceBadge.className = 'badge badge-amber';
+    reactionTypeEl.textContent = entry.type;
+    reactionNoteEl.textContent = entry.note;
+    renderEquationSkeleton(entry, null);
+    addInstances(reactantGroupA, entry.a, 1);
+    addInstances(reactantGroupB, entry.b, 1);
+  }
+
+  function runBalance(){
+    if (!current) return;
+    const { entry } = current;
+    const result = balanceEquation([entry.a, entry.b], entry.products);
+    if (!result) return;
+    current.coeffs = result.coeffs;
+    current.phase = 'balanced';
+
+    const [ca, cb, ...cp] = result.coeffs;
+    clearGroup(reactantGroupA); addInstances(reactantGroupA, entry.a, ca);
+    clearGroup(reactantGroupB); addInstances(reactantGroupB, entry.b, cb);
+
+    productGroups.forEach(g => { clearGroup(g); labGroup.remove(g); });
+    productGroups = [];
+    signPlusProducts.visible = entry.products.length === 2;
+    const anchors = entry.products.length === 1 ? [ANCHOR_P_SINGLE] : [ANCHOR_P1, ANCHOR_P2];
+    entry.products.forEach((formula, i) => {
+      const g = new THREE.Group();
+      g.visible = false;
+      addInstances(g, formula, cp[i]);
+      g.userData.restAnchor = anchors[i];
+      labGroup.add(g);
+      productGroups.push(g);
+    });
+
+    renderEquationSkeleton(entry, result.coeffs);
+    popCoefficients();
+    balanceBadge.textContent = 'balanced';
+    balanceBadge.className = 'badge badge-accent';
+    balanceBtn.disabled = true;
+    reactBtn.disabled = false;
+  }
+
+  function startReaction(){
+    if (!current || current.phase !== 'balanced') return;
+    exitFocus();
+    current.phase = 'reacting';
+    current.reactStart = performance.now();
+    current.burstFired = false;
+    current.ghosted = false;
+    current.caption = '';
+    // products start with no bonds; they form during the second half of the reaction
+    productGroups.forEach(g => setBondScale(g, 0));
+    reactBtn.disabled = true;
+    equationEl.classList.add('pulsing');
+  }
+
+  function ease(t){ return t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2; }
+
+  function updateReaction(now){
+    if (!current || current.phase !== 'reacting') return;
+    const t = now - current.reactStart;
+    const { entry } = current;
+
+    // Caption tells the story of each stage in the HUD.
+    let caption;
+    if (t < 350) caption = 'Reactants collide…';
+    else if (t < 900) caption = `Breaking bonds: ${bondCaption([entry.a, entry.b])}`;
+    else if (t < 1150) caption = 'Atoms rearrange…';
+    else caption = `Forming bonds: ${bondCaption(entry.products)}`;
+    if (t < 2150 && caption !== current.caption) { current.caption = caption; reactionNoteEl.textContent = caption; }
+
+    if (t < 900) {
+      // reactant bonds snap while the molecules are still closing in
+      const breakP = ease(clamp01((t-350)/500));
+      setBondScale(reactantGroupA, 1-breakP);
+      setBondScale(reactantGroupB, 1-breakP);
+      const p = ease(Math.min(1, t/900));
+      reactantGroupA.position.lerpVectors(ANCHOR_A, ZERO, p);
+      reactantGroupB.position.lerpVectors(ANCHOR_B, ZERO, p);
+      reactantGroupA.scale.setScalar(1 - 0.5*p);
+      reactantGroupB.scale.setScalar(1 - 0.5*p);
+    } else if (!current.burstFired) {
+      current.burstFired = true;
+      spawnBurst(0x2DD4BF);
+      reactionLight.intensity = 8;
+      setBondScale(reactantGroupA, 0); setBondScale(reactantGroupB, 0);
+      ghostGroup(reactantGroupA); ghostGroup(reactantGroupB);
+      current.ghosted = true;
+    }
+
+    if (t >= 900 && t < 2150) {
+      reactionLight.intensity = Math.max(0, 8 * (1 - (t-900)/500));
+      const p2 = ease(Math.min(1, (t-900)/1250));
+      const formP = ease(clamp01((t-1150)/1000));
+      productGroups.forEach(g => setBondScale(g, formP));
+      // Reactants settle back to their spot — they aren't erased, they became the products.
+      reactantGroupA.position.lerpVectors(ZERO, ANCHOR_A, p2);
+      reactantGroupB.position.lerpVectors(ZERO, ANCHOR_B, p2);
+      reactantGroupA.scale.setScalar(0.5 + 0.5*p2);
+      reactantGroupB.scale.setScalar(0.5 + 0.5*p2);
+      productGroups.forEach(g => {
+        g.visible = true;
+        g.position.lerpVectors(ZERO, g.userData.restAnchor, p2);
+        g.scale.setScalar(p2);
+      });
+    }
+
+    if (t >= 2150) {
+      current.phase = 'done';
+      productGroups.forEach(g => setBondScale(g, 1));
+      reactionNoteEl.textContent = entry.note;
+      equationEl.classList.remove('pulsing');
+      resetBtn.hidden = false;
+      // Smoothly settle to a proper fit of the finished result, undoing any
+      // zoom made mid-reaction — reuses the same tween the focus/back
+      // transitions use, just for radius only (theta/phi/target untouched).
+      focusTween = {
+        fromTarget: cam.target.clone(), toTarget: cam.target.clone(),
+        fromRadius: cam.radius, toRadius: computeFitRadius(),
+        fromTheta: cam.theta, toTheta: cam.theta,
+        fromPhi: cam.phi, toPhi: cam.phi,
+        start: performance.now(), duration: 700,
+      };
+    }
+  }
+
+  selA.addEventListener('change', selectReaction);
+  selB.addEventListener('change', selectReaction);
+  balanceBtn.addEventListener('click', runBalance);
+  reactBtn.addEventListener('click', startReaction);
+  resetBtn.addEventListener('click', selectReaction);
+
+  const hud = document.getElementById('hud');
+  const hudToggleBtn = document.getElementById('hudToggleBtn');
+  function hidePanel(){
+    if (hud.hidden) return;
+    hud.hidden = true;
+    hudToggleBtn.textContent = '⌃ Show panel';
+    resize();
+  }
+  hudToggleBtn.addEventListener('click', () => {
+    if (hud.hidden) {
+      hud.hidden = false;
+      hudToggleBtn.textContent = '⌄ Hide panel';
+      resize();
+    } else {
+      hidePanel();
+    }
+  });
+
+  /* ---------------- Render loop ---------------- */
+
+  // The chamber's camera distance was a fixed constant, tuned by eye for one
+  // particular aspect ratio. But this viewport is often short and very wide
+  // (the bottom panel eats a lot of vertical space), which pushes the actual
+  // horizontal field of view much wider than that constant assumed — so the
+  // equation (anchors span -6.4 to 6.4) ends up using only a fraction of the
+  // frame, clustered near center with huge unused margins on both sides.
+  //
+  // A field-of-view-based formula (solving distance from the real aspect
+  // ratio) sounds right, but proved unreliable in practice across this app's
+  // aspect-ratio extremes (the bottom panel makes the viewport very short and
+  // wide) — it swung from radius 11.5 reported as "too far" to a computed
+  // ~4.5 reported as "too close" for the same panel-open aspect ratio. Rather
+  // than keep tuning a formula that can't be visually verified here, this
+  // uses a single fixed value picked to sit between those two known-bad
+  // results, at the cost of not being perfectly tuned for every window size.
+  function computeFitRadius(){
+    // Distance at which the whole chamber (reactants at x=-6.4, products at
+    // x=+6.4, a couple of rows tall) fits the viewport in BOTH directions.
+    // 9 is the floor: it's the framing that looks right on wide desktop
+    // windows; narrow or portrait viewports need to pull back further than
+    // that or the outer molecules fall off-screen.
+    const halfTan = Math.tan((camera.fov*Math.PI/180)/2);
+    const aspect = camera.aspect || 1;
+    const needW = 8.6 / (halfTan*aspect);
+    const needH = 3.6 / halfTan;
+    return Math.min(MAX_RADIUS, Math.max(9, needW, needH));
+  }
+  function fitChamberRadius(){
+    if (focusState) return; // don't fight the close-up focus zoom
+    cam.radius = computeFitRadius();
+  }
+
+  function resize(){
+    // The canvas can be narrower than the viewport (Ion's side panel takes a strip of it).
+    const w = canvas.clientWidth || viewport.clientWidth, h = canvas.clientHeight || viewport.clientHeight;
+    camera.aspect = w / (h || 1);
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+    fitChamberRadius();
+    if (activeAtomViewer) activeAtomViewer.resize();
+    if (activeLocator) activeLocator.resize();
+    if (activeMoleculeViewer) activeMoleculeViewer.resize();
+    if (activeBondStory) activeBondStory.resize();
+    updateIonLayout();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let lastTime = performance.now();
+  function animate(now){
+    const dt = Math.min(0.05, (now - lastTime)/1000);
+    lastTime = now;
+
+    [reactantGroupA, reactantGroupB, ...productGroups].forEach(g => {
+      g.children.forEach(mesh => {
+        if (!mesh.userData.bob) return;
+        mesh.position.y = mesh.userData.bob.baseY + Math.sin(now*0.001*mesh.userData.bob.speed + mesh.userData.bob.phase)*0.1;
+        mesh.rotation.x += mesh.userData.spin.x * dt;
+        mesh.rotation.y += mesh.userData.spin.y * dt;
+        mesh.rotation.z += mesh.userData.spin.z * dt;
+      });
+    });
+
+    for (let i=activeBursts.length-1; i>=0; i--){
+      const b = activeBursts[i];
+      const t = (now - b.start)/550;
+      if (t >= 1) { labGroup.remove(b.mesh); activeBursts.splice(i,1); continue; }
+      b.mesh.scale.setScalar(0.4 + t*3.2);
+      b.mesh.material.opacity = 0.9 * (1-t);
+      b.mesh.rotation.y += 0.05;
+    }
+
+    updateReaction(now);
+
+    updateFocusTween(now);
+    if (!renderer.xr.isPresenting) updateOrbitCamera();
+    renderer.render(scene, camera);
+
+    if (activeAtomViewer) activeAtomViewer.update(now, dt);
+    if (activeLocator) activeLocator.update(now, dt);
+    if (activeMoleculeViewer) activeMoleculeViewer.update(now, dt);
+    if (activeBondStory) activeBondStory.update(now, dt);
+  }
+  renderer.setAnimationLoop(animate);
+
+  /* ---------------- Ion: scripted lab assistant ---------------- */
+  // Ion answers from the same data the rest of the app draws from (ELEMENTS, MOLECULES,
+  // MOLECULE_INFO, bondInfo(), oxidationBySymbol()) rather than from per-element scripts, so any
+  // element or reaction added to that data is covered automatically. The whole engine is one
+  // call, ionAnswer(question) -> string, plus assistantContext for "what is on screen" —
+  // exactly the two inputs a live LLM would need, so it can replace ionAnswer() later.
+
+  // ION-ENGINE-START
+  const SUP_CH = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+  const sup = n => String(n).replace(/\d/g, d => SUP_CH[d]);
+  const unsup = s => s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, c => SUP_CH.indexOf(c));
+  const ionSymbol = (el, n) => el + (Math.abs(n) > 1 ? sup(Math.abs(n)) : '') + (n > 0 ? '⁺' : '⁻');
+  const nameOf = el => ATOMIC_NAMES[el];
+  const lowName = el => ATOMIC_NAMES[el].toLowerCase();
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const enGap = (a, b) => Math.abs(ELEMENTS[a].en - ELEMENTS[b].en).toFixed(2);
+  const elementsOf = formula => Array.from(new Set(MOLECULES[formula].atoms.map(a => a.el)));
+  const sumCounts = list => list.reduce((acc, f) => {
+    Object.entries(parseFormula(f)).forEach(([el, n]) => { acc[el] = (acc[el] || 0) + n; });
+    return acc;
+  }, {});
+  const formulaList = (list, coeffs, offset) => list
+    .map((f, i) => { const c = coeffs ? coeffs[i + offset] : 1; return (c > 1 ? c : '') + toSubscript(f); })
+    .join(' + ');
+  const equationText = (entry, coeffs) => `${formulaList([entry.a, entry.b], coeffs, 0)} → ${formulaList(entry.products, coeffs, 2)}`;
+
+  // Subshells from the config string, e.g. Fe -> { s:{n:4,e:2}, d:{n:3,e:6}, ... } (last one wins,
+  // so s is the outermost s subshell).
+  function configParts(el){
+    const re = /(\d)([spdf])([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, out = {};
+    let m;
+    while ((m = re.exec(el.config))) out[m[2]] = { n:+m[1], e:+unsup(m[3]) };
+    return out;
+  }
+
+  // Which elements the student mentioned, in the order they appear. Names match whole words
+  // ("environment" does not contain iron); symbols are case-sensitive ("Na", "Fe").
+  function elementsInText(text){
+    const hits = [];
+    Object.keys(ELEMENTS).forEach(sym => {
+      const byName = new RegExp(`\\b${ATOMIC_NAMES[sym]}\\b`, 'i').exec(text);
+      const bySym = new RegExp(`\\b${sym}\\b`).exec(text);
+      const at = [byName, bySym].filter(Boolean).map(m => m.index);
+      if (at.length) hits.push({ sym, at:Math.min(...at) });
+    });
+    return hits.sort((x, y) => x.at - y.at).map(h => h.sym);
+  }
+
+  // "3+", "2-", "+3" typed by the student -> a signed number (else null).
+  function wantedState(text){
+    let m = /(\d)([+−])(?![A-Za-z0-9])/.exec(text);
+    if (m) return (m[2] === '+' ? 1 : -1) * +m[1];
+    m = /(?:^|\s)([+−])(\d)\b/.exec(text);
+    if (m) return (m[1] === '+' ? 1 : -1) * +m[2];
+    m = /(\d)-(?=\s|\?|$)/.exec(text);
+    return m ? -m[1] : null;
+  }
+
+  function contextElements(){
+    const c = assistantContext;
+    if (c.element) return [c.element];
+    if (c.bond) return [c.bond.elA, c.bond.elB];
+    if (c.molecule) return elementsOf(c.molecule);
+    if (c.reaction) return Array.from(new Set([c.reaction.a, c.reaction.b, ...c.reaction.products].flatMap(elementsOf)));
+    return [];
+  }
+
+  function bondsOf(formula){
+    const def = MOLECULES[formula];
+    return def.bonds.map(([i, j, type, order]) => ({ formula, type, elA:def.atoms[i].el, elB:def.atoms[j].el, order:order || 1 }));
+  }
+  const allBonds = () => Object.keys(MOLECULES).flatMap(bondsOf);
+
+  // The bond a question is about: whatever is on screen first (the picked bond, then the
+  // focused molecule's bonds, then the reaction's), narrowed to a mentioned element when there
+  // is one. Only with nothing on screen does it reach for an example from the whole data set.
+  function findBond(text, kind){
+    const c = assistantContext, mentioned = elementsInText(text);
+    const onScreen = [
+      c.bond ? [Object.assign({ formula:c.molecule }, c.bond)] : [],
+      c.molecule ? bondsOf(c.molecule) : [],
+      c.reaction ? [...c.reaction.products, c.reaction.a, c.reaction.b].flatMap(bondsOf) : [],
+    ];
+    const search = (tiers, useMention, wantKind) => {
+      for (const tier of tiers) {
+        const hit = tier.find(b => (!useMention || mentioned.includes(b.elA) || mentioned.includes(b.elB)) && (!wantKind || b.type === wantKind));
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return (mentioned.length && search(onScreen, true, null)) || search(onScreen, false, null)
+      || (mentioned.length && kind && search([allBonds()], true, kind)) || (kind && search([allBonds()], false, kind))
+      || (mentioned.length && search([allBonds()], true, null)) || search([allBonds()], false, null);
+  }
+
+  // A textbook-clear bond of the given kind (ionic: any; covalent: noticeably polar), to compare against.
+  function exampleBond(kind, not){
+    return allBonds().find(b => b.type === kind && (kind === 'ionic' || Number(enGap(b.elA, b.elB)) >= 0.4)
+      && !(not && ((b.elA === not.elA && b.elB === not.elB) || (b.elA === not.elB && b.elB === not.elA))));
+  }
+
+  function partnerOf(formula, el){
+    const def = MOLECULES[formula];
+    const partners = def.bonds.flatMap(([i, j, type]) => {
+      const a = def.atoms[i].el, b = def.atoms[j].el;
+      if (a === el && b !== el) return [{ el:b, type }];
+      if (b === el && a !== el) return [{ el:a, type }];
+      return [];
+    });
+    partners.sort((x, y) => Math.abs(ELEMENTS[y.el].en - ELEMENTS[el].en) - Math.abs(ELEMENTS[x.el].en - ELEMENTS[el].en));
+    return partners[0] || null;
+  }
+
+  const ionFallback = () =>
+    `I'm still learning, so I stick to what's on your screen — bonds, electrons, shells, oxidation states and balancing. Try one of the suggestions below, or ask about the atom, bond or reaction you're looking at!`;
+
+  function ionBondReply(text, kind){
+    const b = findBond(text, kind);
+    if (!b) return ionFallback();
+    const info = bondInfo(b.type, b.elA, b.elB, b.order);
+    const [lo, hi] = ELEMENTS[b.elA].en <= ELEMENTS[b.elB].en ? [b.elA, b.elB] : [b.elB, b.elA];
+    const gap = Number(info.diff);
+
+    if (kind && b.type !== kind) {
+      const ex = exampleBond(kind, b);
+      const exLine = ex ? ` For a real ${kind} example, look at ${ex.elA}–${ex.elB}: ${ELEMENTS[ex.elA].en} vs ${ELEMENTS[ex.elB].en}, a gap of ${enGap(ex.elA, ex.elB)}.` : '';
+      return `The ${b.elA}–${b.elB} bond here is actually ${b.type}, not ${kind}: ${lo} (${ELEMENTS[lo].en}) vs ${hi} (${ELEMENTS[hi].en}) is a gap of ${info.diff}, ${b.type === 'ionic' ? 'too big for the atoms to share' : 'too small for either atom to take electrons outright'}.${exLine} Want me to explain why?`;
+    }
+
+    if (b.type === 'ionic') {
+      const states = b.formula ? oxidationBySymbol(b.formula) : {};
+      const nLo = Math.abs(states[lo]) || b.order, nHi = Math.abs(states[hi]) || b.order;
+      return `${nameOf(lo)} (electronegativity ${ELEMENTS[lo].en}) pulls far less on electrons than ${lowName(hi)} (${ELEMENTS[hi].en}) — a gap of ${info.diff}, too big to share. So ${lowName(lo)} gives ${nLo === 1 ? 'its electron' : nLo + ' electrons'} away to ${lowName(hi)}, becoming ${ionSymbol(lo, nLo)} while ${lowName(hi)} becomes ${ionSymbol(hi, -nHi)}. Curious how that differs from a covalent bond, where the atoms share instead?`;
+    }
+
+    const n = b.order, polar = gap >= 0.4;
+    const pairs = n === 1 ? 'one pair' : n === 2 ? 'two pairs' : 'three pairs';
+    const s1 = b.elA === b.elB
+      ? `Both ${lowName(b.elA)} atoms have the same electronegativity (${ELEMENTS[b.elA].en}), so neither can pull an electron away — they share instead.`
+      : `${nameOf(lo)} (electronegativity ${ELEMENTS[lo].en}) and ${lowName(hi)} (${ELEMENTS[hi].en}) differ by only ${info.diff}, so neither can pull an electron away — they share instead.`;
+    const s2 = `They share ${pairs} of electrons (${n === 1 ? 'a single' : n === 2 ? 'a double' : 'a triple'} bond)${polar
+      ? `, but ${lowName(hi)} pulls harder, so the pair sits closer to it and ${lowName(hi)} ends up slightly negative.`
+      : ', and because the pull is so even, the sharing is almost perfectly balanced.'}`;
+    return `${s1} ${s2} ${polar ? `Which atom do you think ends up slightly positive?` : `How many electrons does each atom bring to the bond?`}`;
+  }
+
+  function ionOxidationReply(text){
+    const c = assistantContext, mentioned = elementsInText(text), want = wantedState(text);
+    let el = mentioned[0] || c.element;
+    if (!el && c.bond) el = ELEMENTS[c.bond.elA].en <= ELEMENTS[c.bond.elB].en ? c.bond.elA : c.bond.elB;
+    if (!el && c.molecule) { const st = oxidationBySymbol(c.molecule); el = elementsOf(c.molecule).find(e => st[e] !== 0); }
+    if (!el) el = contextElements()[0];
+    if (!el) return `An oxidation state is the charge an atom would have if every bond were fully ionic. Click an atom or a molecule and ask me again — I'll work it out from its real bonds.`;
+
+    const e = ELEMENTS[el], name = nameOf(el), lname = lowName(el);
+    const common = e.oxidation.map(formatOxidation).join(' and ');
+    const holds = f => MOLECULES[f].atoms.some(a => a.el === el);
+    const pool = [c.molecule, ...(c.reaction ? [...c.reaction.products, c.reaction.a, c.reaction.b] : []), ...Object.keys(MOLECULES)].filter(f => f && holds(f));
+    const formula = (want !== null && pool.find(f => oxidationBySymbol(f)[el] === want)) || pool[0];
+    if (!formula) return `${name}'s common oxidation states are ${common}. Click a molecule that contains it and I'll show you why.`;
+
+    const state = oxidationBySymbol(formula)[el], F = toSubscript(formula), def = MOLECULES[formula];
+    const other = elementsOf(formula).find(x => x !== el);
+    const closer = other ? `Want to check what ${lowName(other)} ends up as in ${F}?` : `Want to compare it with a compound?`;
+
+    if (state === 0) {
+      return `In ${F}, ${lname} is 0 — ${def.bonds.length ? 'it is only bonded to identical atoms, so neither side pulls harder' : 'a lone element has no partner to trade electrons with'}. In compounds ${lname} usually shows ${common}; which one would you like to look at?`;
+    }
+
+    const p = partnerOf(formula, el);
+    const ionic = def.bonds.some(([i, j, type]) => type === 'ionic' && (def.atoms[i].el === el || def.atoms[j].el === el));
+    const nEl = plural(Math.abs(state), 'electron');
+    const lead = want !== null && state !== want ? `${name} isn't ${formatOxidation(want)} in ${F} — it's ${formatOxidation(state)}` : `In ${F}, ${lname} is ${formatOxidation(state)}`;
+    const vs = p ? `(${e.en} vs ${ELEMENTS[p.el].en})` : '';
+
+    if (state > 0) {
+      const s1 = `${lead}: ${ionic ? `it hands over ${nEl} to` : 'its shared electrons count as belonging to'} the more electronegative ${p ? lowName(p.el) : 'partner'} ${vs}.`;
+      const cp = configParts(e);
+      let s2;
+      if (cp.s && cp.d && cp.d.e > 0 && cp.d.e < 10) {
+        const extra = Math.max(0, state - cp.s.e), sShell = `${cp.s.n}s${sup(cp.s.e)}`, dShell = `${cp.d.n}d${sup(cp.d.e)}`;
+        s2 = extra > 0
+          ? `The ${sShell} pair leaves first, then ${extra} more ${extra === 1 ? 'comes' : 'come'} from the ${dShell} subshell — those d electrons sit so close in energy to ${cp.s.n}s that ${lname} can spend them too, which is why its common states are ${common}.`
+          : `Only the ${sShell} pair leaves here, but ${lname} can also spend a ${cp.d.n}d electron from its ${dShell} subshell — which is why its common states are ${common}.`;
+      } else if (state === e.valence) {
+        s2 = `That empties its outer shell (${plural(e.valence, 'valence electron')}), ${e.shells.length === 1 ? 'leaving just a bare nucleus' : 'exposing the stable full shell underneath'}.`;
+      } else {
+        s2 = `${name} has ${plural(e.valence, 'valence electron')}, so a state of ${formatOxidation(state)} reaches beyond its outer shell.`;
+      }
+      return `${s1} ${s2} ${closer}`;
+    }
+
+    const s1 = `${lead}: ${ionic ? `it gains ${nEl} from` : `it pulls ${nEl} closer from`} the less electronegative ${p ? lowName(p.el) : 'partner'} ${vs}.`;
+    const s2 = `Starting with ${plural(e.valence, 'valence electron')}, ${Math.abs(state)} more brings its outer shell to ${e.valence + Math.abs(state)} — a full, stable shell.`;
+    return `${s1} ${s2} ${closer}`;
+  }
+
+  function ionValenceReply(text){
+    const c = assistantContext, el = elementsInText(text)[0] || c.element || contextElements()[0];
+    const def = `A valence electron is one in an atom's outermost occupied shell — the ones that actually take part in bonding.`;
+    if (!el) return `${def} Click an atom and ask me again — I'll use its real electron counts.`;
+    const e = ELEMENTS[el], name = nameOf(el), v = e.valence, cp = configParts(e);
+    const sh = c.shell && c.element === el ? c.shell : null;
+    const s1 = sh
+      ? (sh.isValence
+        ? `That ring is ${lowName(el)}'s valence shell — its outermost occupied level, holding ${plural(sh.electronCount, 'valence electron')} — the electrons that take part in bonding.`
+        : `That's an inner shell (${plural(sh.electronCount, 'electron')}): held tight and shielded, so it doesn't bond — valence electrons live in the outermost shell.`)
+      : def;
+    const tendency = e.shells.length === 1 ? `tends to gain ${2 - v} more or share`
+      : v <= 3 ? `tends to give ${v === 1 ? 'it' : 'them'} away`
+      : v === 4 ? 'usually shares electrons'
+      : `tends to gain ${8 - v} more or share`;
+    const dNote = e.bondShellDepth > 1 && cp.d ? `, though its ${cp.d.n}d electrons can join in too` : '';
+    return `${s1} ${name} has ${plural(v, 'valence electron')} (${e.shells.join('-')}), so it ${tendency}${dNote}. Which ring in the atom view holds ${lowName(el)}'s valence electrons?`;
+  }
+
+  function ionElectronegativityReply(text){
+    const c = assistantContext;
+    const mentioned = elementsInText(text);
+    const known = Array.from(new Set([...mentioned, ...(c.bond ? [c.bond.elA, c.bond.elB] : []), ...(c.element ? [c.element] : [])]));
+    const byEn = Object.keys(ELEMENTS).sort((x, y) => ELEMENTS[x].en - ELEMENTS[y].en);
+    const lo = byEn[0], hi = byEn[byEn.length - 1];
+    const def = `Electronegativity (Pauling scale) measures how strongly an atom pulls on shared electrons.`;
+    if (known.length >= 2) {
+      const [a, b] = known;
+      const [weak, strong] = ELEMENTS[a].en <= ELEMENTS[b].en ? [a, b] : [b, a];
+      const gap = Number(enGap(a, b));
+      return `${def} ${nameOf(weak)} scores ${ELEMENTS[weak].en} and ${lowName(strong)} ${ELEMENTS[strong].en}, a gap of ${enGap(a, b)} — ${gap >= 1.7 ? 'wide enough that electrons are transferred (ionic)' : gap >= 0.4 ? 'enough for a polar bond, but still shared' : 'so small that the electrons are shared almost evenly'}. Can you guess which way the electrons drift?`;
+    }
+    if (known.length === 1) {
+      const a = known[0];
+      return `${def} ${nameOf(a)} scores ${ELEMENTS[a].en}, on a scale that runs from ${lowName(lo)} (${ELEMENTS[lo].en}) to ${lowName(hi)} (${ELEMENTS[hi].en}). Click a bond to see it compared with a partner!`;
+    }
+    return `${def} In this lab it runs from ${lowName(lo)} (${ELEMENTS[lo].en}) up to ${lowName(hi)} (${ELEMENTS[hi].en}), and the gap between two atoms decides whether they share or transfer electrons. Click a bond and I'll compare a real pair!`;
+  }
+
+  function ionBalancingReply(){
+    const r = assistantContext.reaction || findReaction(selA.value, selB.value) || REACTIONS[0];
+    const left = sumCounts([r.a, r.b]), right = sumCounts(r.products);
+    const off = Object.keys(left).find(el => left[el] !== right[el]);
+    const solved = balanceEquation([r.a, r.b], r.products);
+    const eq = equationText(r, null);
+    const s2 = off
+      ? `In ${eq}, ${lowName(off)} shows up ${left[off]}× on the left but ${right[off]}× on the right${solved ? ` — the balanced version is ${equationText(r, solved.coeffs)}` : ''}.`
+      : `${eq} is already balanced — every element matches on both sides.`;
+    return `Atoms can't be created or destroyed, so every element has to appear the same number of times on both sides. ${s2} ${off ? 'Press ⚖ Balance equation and watch the coefficients settle!' : 'Try another pair to see a lopsided one.'}`;
+  }
+
+  function ionReactionReply(text){
+    const r = assistantContext.reaction;
+    if (!r) return `Pick two reactants in the panel, then Balance and React — I'll walk you through which bonds break and form.`;
+    const eq = equationText(r, current && current.coeffs);
+    if (/\bbreak|\bform/i.test(text)) {
+      return `In ${eq}, bonds broken: ${bondCaption([r.a, r.b])}; bonds formed: ${bondCaption(r.products)}. That swap is what makes ${r.name.toLowerCase()} a ${r.type.toLowerCase()} reaction. ${r.note}`;
+    }
+    return `${r.name} is a ${r.type.toLowerCase()} reaction: ${eq}. ${r.note} Want to know which bonds break and form?`;
+  }
+
+  function ionSubatomicReply(text){
+    const c = assistantContext, el = elementsInText(text)[0] || c.element || contextElements()[0];
+    const lines = {
+      proton:`Protons carry +1 charge, and how many an atom has — its atomic number — decides which element it is.`,
+      neutron:`Neutrons carry no charge; they add mass and help hold the nucleus together.`,
+      electron:`Electrons carry −1 charge and sit in shells around the nucleus; they are what bonds are made of.`,
+    };
+    const s1 = lines[c.particle] || `Every atom is built from protons (+, in the nucleus), neutrons (no charge, also in the nucleus) and electrons (−, in shells around it).`;
+    if (!el) return `${s1} Click an atom and I'll give you its real counts.`;
+    const e = ELEMENTS[el];
+    return `${s1} ${nameOf(el)} has ${e.number} protons, ${e.neutrons} neutrons and ${e.number} electrons (${e.shells.join('-')}), so its mass number is ${e.number + e.neutrons}. Curious what's inside a proton? Click one in the atom view.`;
+  }
+
+  function ionShellsReply(text){
+    const c = assistantContext, el = elementsInText(text)[0] || c.element || contextElements()[0];
+    const s1 = `Electrons live in shells — energy levels around the nucleus that fill from the inside out.`;
+    if (!el) return `${s1} Click an atom and I'll show you how its own electrons are arranged.`;
+    const e = ELEMENTS[el], sh = c.shell && c.element === el ? c.shell : null;
+    const picked = sh ? ` The ${sh.letter} shell you picked holds ${plural(sh.electronCount, 'electron')}${sh.isValence ? ' and is the valence shell' : ''}.` : '';
+    return `${s1} ${nameOf(el)} arranges its electrons ${e.shells.join('-')} across ${plural(e.shells.length, 'shell')} (${e.config}); the outermost one is its valence shell.${picked} Which shell do you think does the bonding?`;
+  }
+
+  const ION_TOPICS = [
+    { id:'oxidation', reply:ionOxidationReply, patterns:[[/oxidation (state|number)/i, 4], [/oxidi[sz]/i, 2], [/\d[+−-](?![A-Za-z0-9])|(?:^|\s)[+−]\d\b/, 3]] },
+    { id:'ionic', reply:t => ionBondReply(t, 'ionic'), patterns:[[/ionic|\bions?\b|cation|anion/i, 3], [/(give|gives|giving|lose|loses|losing|donat\w*|transfer\w*|hand\w* over|gain|gains|take|takes).{0,25}electron|electron.{0,25}(away|transfer)/i, 3]] },
+    { id:'covalent', reply:t => ionBondReply(t, 'covalent'), patterns:[[/covalent|\bshar(e|es|ed|ing)\b|single bond|double bond|triple bond/i, 3]] },
+    { id:'electronegativity', reply:ionElectronegativityReply, patterns:[[/electronegativ|\bEN\b|pauling|\bpulls?\b/i, 3]] },
+    { id:'valence', reply:ionValenceReply, patterns:[[/valence|outer(most)?\s+(shell|electron)/i, 3], [/inner shell|take part in bonding|participate/i, 3]] },
+    { id:'balancing', reply:ionBalancingReply, patterns:[[/balanc|coefficient|conservation|same number of atoms/i, 3]] },
+    { id:'reaction', reply:ionReactionReply, patterns:[[/react(ion|s|ants?)?\b|synthesis|combustion|products?\b/i, 2], [/\bbreak|\bform(s|ed|ing)?\b/i, 3]] },
+    { id:'subatomic', reply:ionSubatomicReply, patterns:[[/proton|neutron|electron|nucleus|nucleon|isotope|atomic number|mass number|quark/i, 1.5]] },
+    { id:'shells', reply:ionShellsReply, patterns:[[/shell|energy level|orbit|subshell|configuration|orbital|\brings?\b/i, 3]] },
+    { id:'bond', reply:t => ionBondReply(t, null), patterns:[[/\bbond(s|ed|ing)?\b/i, 1]] },
+    { id:'greeting', reply:() => `Hi! Ask me about whatever is on screen — an atom, a bond or a reaction — or tap one of the suggestions below.`, patterns:[[/^\s*(hi|hello|hey|hiya|good (morning|afternoon|evening))\b/i, 5]] },
+    { id:'thanks', reply:() => `Happy to help! Click another atom or bond and ask me about that one too.`, patterns:[[/\b(thanks|thank you|thx|cool|awesome|great)\b/i, 4]] },
+    { id:'help', reply:() => `I can explain what's on screen: why atoms form ionic or covalent bonds, valence electrons, shells, oxidation states and balancing. What would you like to know?`, patterns:[[/\bhelp\b|what can you|what do you (do|know)/i, 4]] },
+  ];
+
+  function ionAnswer(text){
+    const q = text.trim();
+    let best = null, bestScore = 0;
+    ION_TOPICS.forEach(t => {
+      const score = t.patterns.reduce((sum, [re, w]) => sum + (re.test(q) ? w : 0), 0);
+      if (score > bestScore) { best = t; bestScore = score; }
+    });
+    try { return best ? best.reply(q) : ionFallback(); }
+    catch (err) { return ionFallback(); }   // never surface an error to the student
+  }
+
+  // What the student is looking at, in plain words.
+  function ionSceneSummary(){
+    const c = assistantContext, f = c.molecule ? toSubscript(c.molecule) : null;
+    if (c.bond) return `the ${c.bond.elA}–${c.bond.elB} ${c.bond.type} bond${f ? ' in ' + f : ''}`;
+    if (c.shell && c.element) return `${lowName(c.element)}'s ${c.shell.isValence ? 'valence' : 'inner'} shell`;
+    if (c.element) return `${lowName(c.element)}${f && MOLECULES[c.molecule].atoms.length > 1 ? ' inside ' + f : ''}`;
+    if (c.molecule) return `${f} (${MOLECULE_INFO[c.molecule].name.toLowerCase()})`;
+    if (c.reaction) return `the reaction ${equationText(c.reaction, null)}`;
+    return 'the reaction chamber';
+  }
+
+  // Short label shown above the input, e.g. "Fe₂O₃ · ionic bond".
+  function ionContextLabel(){
+    const c = assistantContext, parts = [];
+    const f = c.molecule && MOLECULES[c.molecule].atoms.length > 1 ? toSubscript(c.molecule) : null;
+    if (c.bond) { if (f) parts.push(f); parts.push(`${c.bond.type} bond`); }
+    else if (c.shell && c.element) { if (f) parts.push(f); parts.push(lowName(c.element), c.shell.isValence ? 'valence shell' : 'inner shell'); }
+    else if (c.element) { if (f) parts.push(f); parts.push(lowName(c.element) + (c.particle ? ` ${c.particle}` : '')); }
+    else if (c.molecule) { parts.push(toSubscript(c.molecule), MOLECULE_INFO[c.molecule].name); }
+    else if (c.reaction) parts.push(equationText(c.reaction, null));
+    return parts.length ? parts.join(' · ') : 'nothing selected yet';
+  }
+
+  // Three suggestions that fit the current view.
+  function ionChips(){
+    const c = assistantContext;
+    const generic = ["What's a valence electron?", 'What are protons, neutrons and electrons?', 'What is electronegativity?'];
+    const stateChip = (formula, el) => {
+      const n = oxidationBySymbol(formula)[el];
+      return n ? `Why is ${lowName(el)} ${Math.abs(n)}${n > 0 ? '+' : '−'}?` : null;
+    };
+    if (c.bond) {
+      const b = c.bond, [lo, hi] = ELEMENTS[b.elA].en <= ELEMENTS[b.elB].en ? [b.elA, b.elB] : [b.elB, b.elA];
+      if (b.type === 'ionic') {
+        const n = c.molecule ? Math.abs(oxidationBySymbol(c.molecule)[lo]) : 1;
+        return [`Why does ${lowName(lo)} give ${n === 1 ? 'its electron' : 'its electrons'} away?`, "What's the electronegativity gap here?", 'How is this different from a covalent bond?'];
+      }
+      return [b.elA === b.elB ? `Why do two ${lowName(b.elA)} atoms share electrons?` : `Why do ${lowName(lo)} and ${lowName(hi)} share electrons?`,
+        "What's the electronegativity gap here?", 'How is this different from an ionic bond?'];
+    }
+    if (c.shell) {
+      return c.shell.isValence
+        ? ["What's a valence electron?", 'How many electrons does this shell hold?', 'What are protons, neutrons and electrons?']
+        : ["Why don't inner shells take part in bonding?", "What's a valence electron?", 'How many electrons does this shell hold?'];
+    }
+    if (c.particle) return ['What are protons, neutrons and electrons?', "What's a valence electron?", c.element ? `How many protons does ${lowName(c.element)} have?` : 'What is electronegativity?'];
+    if (c.element) {
+      const sc = c.molecule ? stateChip(c.molecule, c.element) : null;
+      return [sc || `How many electrons does ${lowName(c.element)} have?`, "What's a valence electron?", 'What are protons, neutrons and electrons?'];
+    }
+    if (c.molecule) {
+      const el = elementsOf(c.molecule).find(e => stateChip(c.molecule, e));
+      const hasBonds = MOLECULES[c.molecule].bonds.length > 0;
+      return el && hasBonds
+        ? [stateChip(c.molecule, el), `What kind of bond holds ${toSubscript(c.molecule)} together?`, 'What is electronegativity?']
+        : generic;
+    }
+    return ['Why does this need balancing?', 'What kind of reaction is this?', 'Which bonds break and form?'];
+  }
+  // ION-ENGINE-END
+
+  const ionApp = document.getElementById('app');
+  const ionBtn = document.getElementById('ionBtn');
+  const ionPanel = document.getElementById('ionPanel');
+  const ionMessages = document.getElementById('ionMessages');
+  const ionContextEl = document.getElementById('ionContext');
+  const ionChipsEl = document.getElementById('ionChips');
+  const ionForm = document.getElementById('ionForm');
+  const ionInput = document.getElementById('ionInput');
+  const ionSendBtn = document.getElementById('ionSend');
+  let ionGreeted = false, ionBusy = false, ionChipKey = '', ionShrunk = false;
+
+  // The button and panel sit above the HUD in the chamber (which is why their offset follows the
+  // HUD's height) and in the bottom-right corner of the detail view, which covers the HUD.
+  function updateIonLayout(){
+    if (!ionLayoutReady) return;
+    const detailOpen = detailView.classList.contains('open');
+    const hudH = hud.hidden ? 0 : hud.offsetHeight;
+    // Netlify's "Powered by Netlify" badge is pinned to the bottom-right corner (about 75px tall
+    // including its margin), so never sit lower than that.
+    const NETLIFY_BADGE_CLEARANCE = 84;
+    ionApp.style.setProperty('--ion-bottom', (detailOpen ? NETLIFY_BADGE_CLEARANCE : Math.max(hudH + 16, NETLIFY_BADGE_CLEARANCE)) + 'px');
+    ionApp.classList.toggle('detail-open', detailOpen);
+
+    // On desktop the chamber's canvas gives up a strip for the open panel, so the whole reaction
+    // refits beside it instead of hiding behind it. (In the detail view the atom is centred and
+    // the panel simply overlays the empty right side; on phones the sheet overlays the canvas.)
+    const shrink = ionApp.classList.contains('ion-open') && !detailOpen && window.matchMedia('(min-width: 701px), (orientation: landscape)').matches;
+    if (shrink !== ionShrunk) {
+      ionShrunk = shrink;
+      const zoom = focusState ? null : cam.radius / computeFitRadius();   // keep the student's own zoom level
+      ionApp.classList.toggle('ion-shrink', shrink);
+      resize();
+      if (zoom !== null) cam.radius = Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, computeFitRadius() * zoom));
+    }
+  }
+
+  function ionAddMessage(role, text){
+    const div = document.createElement('div');
+    div.className = `ion-msg ion-msg-${role}`;
+    div.textContent = text;
+    ionMessages.appendChild(div);
+    ionMessages.scrollTop = ionMessages.scrollHeight;
+    return div;
+  }
+
+  function ionSend(raw){
+    const text = raw.trim();
+    if (!text || ionBusy) return;
+    ionAddMessage('user', text);
+    ionInput.value = '';
+    ionBusy = true; ionSendBtn.disabled = true;
+    const reply = ionAnswer(text);   // answered against what is on screen right now
+    const typing = document.createElement('div');
+    typing.className = 'ion-msg ion-msg-bot ion-typing';
+    typing.setAttribute('aria-label', 'Ion is typing');
+    typing.innerHTML = '<i></i><i></i><i></i>';
+    ionMessages.appendChild(typing);
+    ionMessages.scrollTop = ionMessages.scrollHeight;
+    setTimeout(() => {
+      typing.remove();
+      ionAddMessage('bot', reply);
+      ionBusy = false; ionSendBtn.disabled = false;
+    }, 600);
+  }
+
+  ionRefresh = function(){
+    ionContextEl.textContent = 'Talking about: ' + ionContextLabel();
+    const chips = ionChips(), key = chips.join('|');
+    if (key !== ionChipKey) {
+      ionChipKey = key;
+      ionChipsEl.innerHTML = '';
+      chips.forEach(label => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ion-chip'; b.textContent = label;
+        b.addEventListener('click', () => ionSend(label));
+        ionChipsEl.appendChild(b);
+      });
+    }
+    updateIonLayout();
+  };
+
+  function openIon(){
+    ionPanel.classList.add('open');
+    ionPanel.setAttribute('aria-hidden', 'false');
+    ionApp.classList.add('ion-open');
+    ionBtn.setAttribute('aria-expanded', 'true');
+    if (!ionGreeted) {
+      ionGreeted = true;
+      ionAddMessage('bot', `Hi, I'm Ion, your lab assistant! You're looking at ${ionSceneSummary()} — ask me why it works, or tap a suggestion below.`);
+    }
+    ionRefresh();
+    // Don't pop the on-screen keyboard over the 3D view on touch devices.
+    if (!window.matchMedia('(pointer: coarse)').matches) ionInput.focus({ preventScroll:true });
+  }
+  function closeIon(){
+    ionPanel.classList.remove('open');
+    ionPanel.setAttribute('aria-hidden', 'true');
+    ionApp.classList.remove('ion-open');
+    ionBtn.setAttribute('aria-expanded', 'false');
+    updateIonLayout();
+    ionBtn.focus({ preventScroll:true });
+  }
+  ionBtn.addEventListener('click', openIon);
+  document.getElementById('ionClose').addEventListener('click', closeIon);
+  ionForm.addEventListener('submit', e => { e.preventDefault(); ionSend(ionInput.value); });
+
+  ionLayoutReady = true;
+  if (window.ResizeObserver) new ResizeObserver(updateIonLayout).observe(hud);
+  ionRefresh();
+
+  selectReaction();
+})();
+</script>
+</body>
+</html>
