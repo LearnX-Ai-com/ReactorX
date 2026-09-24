@@ -2,16 +2,21 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { bondList } from '../chemistry/bonds';
-import { findReaction } from '../chemistry/reactions';
+import { ensureMoleculesResolved, isSettled } from '../chemistry/moleculeSource';
+import { ReactionNotPossibleError, fetchReactionFromFormulas } from '../chemistry/reactionApi';
+import { cacheDiscoveredReaction, findReaction } from '../chemistry/reactions';
 import type { Reaction } from '../chemistry/types';
 import { ease } from './math';
 import {
-  addInstances, clearGroup, ghostGroup, setBondScale,
+  addInstances, clearGroup, setBondScale,
 } from './moleculeMesh';
 import { attachOrbitControls, type CameraOrbitState } from './orbitControls';
 import { makeSignSprite } from './signSprite';
 
-export type ChamberPhase = 'no-reaction' | 'idle' | 'reacting' | 'done';
+// 'checking' is the AI-backed fallback in flight — findReaction missed the
+// hand-authored list, so reactionApi.ts is asking whether the pair reacts
+// at all before settling into 'idle' (yes) or back to 'no-reaction' (no).
+export type ChamberPhase = 'no-reaction' | 'checking' | 'idle' | 'reacting' | 'done';
 
 export interface ChamberSnapshot {
   phase: ChamberPhase;
@@ -22,6 +27,14 @@ export interface ChamberSnapshot {
 export interface ReactionChamberHandle {
   react(): void;
   reset(): void;
+  /** Reset + react in one synchronous call, so a reaction can be replayed
+   * from a 'done' state without a round trip through React's async effect
+   * scheduling — resetChamber/applyCoefficients/react all read the current
+   * coeffs prop directly via closure, so the replay shows the correct
+   * (already-balanced) counts immediately rather than the 1-each preview
+   * resetChamber alone would leave up until the coeffs-changed effect
+   * happened to re-fire. */
+  play(): void;
 }
 
 interface ReactionChamberModelProps {
@@ -45,6 +58,14 @@ interface ReactionChamberModelProps {
   /** World-space offset for this chamber's root group — lets it sit on a
    * specific room wall instead of always at the origin. */
   roomOffset?: [number, number, number];
+  /** Yaw applied to the root group so its front face (local +Z) turns to
+   * match the wall it's sitting on — same convention as PeriodicTableRoom's
+   * `rotation` prop. Only meaningful alongside roomOffset. */
+  roomRotationY?: number;
+  /** Uniform scale applied to the root group — lets the chamber's existing
+   * anchor layout (ANCHOR_A..ANCHOR_P2, spanning ~13 units) fit inside a
+   * compact meter-scale wall without rewriting those anchor constants. */
+  roomScale?: number;
 }
 
 const ANCHOR_A = new THREE.Vector3(-6.4, 0.6, 0);
@@ -54,6 +75,19 @@ const ANCHOR_P2 = new THREE.Vector3(6.4, 0.6, 0);
 const ANCHOR_P_SINGLE = new THREE.Vector3(3.6, 0.6, 0);
 const ZERO = new THREE.Vector3(0, 0.6, 0);
 const DEFAULT_RADIUS = 11.5;
+
+// Every stage of the reaction timeline scales off this one knob — bump it
+// up/down to slow the whole sequence down (or speed it back up) without
+// throwing off the proportions between collide/break/rearrange/form.
+const REACT_SLOWMO = 1.8;
+const T_COLLIDE = 350 * REACT_SLOWMO;
+const T_BREAK_END = 900 * REACT_SLOWMO;
+const T_REARRANGE_END = 1150 * REACT_SLOWMO;
+const T_DONE = 2150 * REACT_SLOWMO;
+const BREAK_WINDOW = 500 * REACT_SLOWMO;
+const FORM_WINDOW = 1000 * REACT_SLOWMO;
+const LIGHT_FADE_WINDOW = 500 * REACT_SLOWMO;
+const BURST_DURATION = 550 * REACT_SLOWMO;
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
@@ -81,7 +115,7 @@ interface Burst {
  */
 export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionChamberModelProps>(
   function ReactionChamberModel({
-    reactantA, reactantB, coeffs, onStateChange, driveCamera = true, roomOffset,
+    reactantA, reactantB, coeffs, onStateChange, driveCamera = true, roomOffset, roomRotationY, roomScale,
   }, ref) {
     const { scene, camera, gl } = useThree();
 
@@ -97,46 +131,54 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
     const camStateRef = useRef<CameraOrbitState>({ theta: 0, phi: 1.08, radius: DEFAULT_RADIUS });
     const camTargetRef = useRef(new THREE.Vector3(0, 0.95, 0));
     const camTweenRef = useRef<{ fromRadius: number; toRadius: number; start: number; duration: number } | null>(null);
+    // Bumped on every resetChamber call — an in-flight AI reaction lookup
+    // checks this before applying its result, so a stale response (the
+    // student picked different reactants again before it landed) is
+    // silently dropped instead of clobbering newer state.
+    const resetGenerationRef = useRef(0);
 
-    function resetChamber(a: string, b: string): void {
-      camTweenRef.current = null;
-      camStateRef.current.theta = 0;
-      camStateRef.current.phi = 1.08;
-      camStateRef.current.radius = DEFAULT_RADIUS;
+    // A single sprite object is swapped (removed + disposed, then replaced)
+    // rather than toggling between two pre-built alternates — with only one
+    // arrow sprite ever in the group at a time, there's no way for a normal
+    // and a reversible arrow to end up simultaneously visible.
+    function setArrowGlyph(reversible: boolean): void {
+      const old = signArrowRef.current;
+      if (old) {
+        rootRef.current.remove(old);
+        const material = old.material as THREE.SpriteMaterial;
+        material.map?.dispose();
+        material.dispose();
+      }
+      const next = makeSignSprite(reversible ? '⇌' : '→', '#2DD4BF');
+      next.position.set(0, 0.6, 0);
+      rootRef.current.add(next);
+      signArrowRef.current = next;
+    }
 
+    // Shared by both the synchronous (hand-authored list) and async
+    // (AI-discovered) paths below — builds the reactant/product groups for
+    // a known-good Reaction and reports 'idle'.
+    function applyEntry(entry: Reaction): void {
+      setArrowGlyph(!!entry.reversible);
+      if (signPlusProductsRef.current) signPlusProductsRef.current.visible = entry.products.length === 2;
+
+      currentRef.current = { entry, phase: 'idle', reactStart: 0, burstFired: false, caption: '' };
       clearGroup(reactantGroupARef.current);
       clearGroup(reactantGroupBRef.current);
+      addInstances(reactantGroupARef.current, entry.a, 1);
+      addInstances(reactantGroupBRef.current, entry.b, 1);
+
       productGroupsRef.current.forEach((g) => {
         clearGroup(g);
         rootRef.current.remove(g);
       });
       productGroupsRef.current = [];
-      reactantGroupARef.current.visible = true;
-      reactantGroupBRef.current.visible = true;
-      reactantGroupARef.current.scale.set(1, 1, 1);
-      reactantGroupBRef.current.scale.set(1, 1, 1);
-      reactantGroupARef.current.position.copy(ANCHOR_A);
-      reactantGroupBRef.current.position.copy(ANCHOR_B);
-
-      const entry = findReaction(a, b);
-      if (signArrowRef.current) signArrowRef.current.visible = !!entry;
-      if (signPlusProductsRef.current) signPlusProductsRef.current.visible = !!entry && entry.products.length === 2;
-
-      if (!entry) {
-        currentRef.current = null;
-        addInstances(reactantGroupARef.current, a, 1);
-        addInstances(reactantGroupBRef.current, b, 1);
-        onStateChange?.({ phase: 'no-reaction', reaction: null, caption: '' });
-        return;
-      }
-
-      currentRef.current = { entry, phase: 'idle', reactStart: 0, burstFired: false, caption: '' };
-      addInstances(reactantGroupARef.current, entry.a, 1);
-      addInstances(reactantGroupBRef.current, entry.b, 1);
-
-      // Products are visible from the start too, at 1 each — this is a
-      // preview students balance against, not a reveal. Real bonds/reacting
-      // animation still only plays once `react()` runs.
+      // Products are visible from the start, at 1 each — a skeleton
+      // equation a student balances against (you can't balance what you
+      // can't see), not the correct answer. App.tsx defaults coeffs to 1
+      // each rather than auto-solving, and gates React on checkBalance
+      // actually passing — so seeing the products up front doesn't skip the
+      // balancing step, it's what the step needs to be possible at all.
       const anchors = entry.products.length === 1 ? [ANCHOR_P_SINGLE] : [ANCHOR_P1, ANCHOR_P2];
       entry.products.forEach((formula, i) => {
         const g = new THREE.Group();
@@ -148,6 +190,96 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       });
 
       onStateChange?.({ phase: 'idle', reaction: entry, caption: '' });
+    }
+
+    function resetChamber(a: string, b: string): void {
+      camTweenRef.current = null;
+      camStateRef.current.theta = 0;
+      camStateRef.current.phi = 1.08;
+      camStateRef.current.radius = DEFAULT_RADIUS;
+
+      reactantGroupARef.current.visible = true;
+      reactantGroupBRef.current.visible = true;
+      reactantGroupARef.current.scale.set(1, 1, 1);
+      reactantGroupBRef.current.scale.set(1, 1, 1);
+      reactantGroupARef.current.position.copy(ANCHOR_A);
+      reactantGroupBRef.current.position.copy(ANCHOR_B);
+
+      const requestId = ++resetGenerationRef.current;
+      const entry = findReaction(a, b);
+      if (entry) {
+        if (entry.products.every((f) => isSettled(f))) {
+          applyEntry(entry); // fully synchronous — play()/reset() depend on this
+          return;
+        }
+        // Known reaction (hand-authored or discovered earlier this session
+        // via reactionApi.ts), but at least one product's structure isn't
+        // resolved yet — e.g. cacheDiscoveredReaction ran before a product
+        // lookup finished or failed. Same resolve-then-render path as a
+        // fresh AI discovery, just skipping the "does this react" call.
+        // isSettled (not getKnownMolecule) also lets a product the
+        // molecule-validity AI conclusively rejected (a reaction can name a
+        // product — e.g. "NO" — that a separate, stricter check then calls
+        // too unstable to render) through this gate once, rather than
+        // retrying the same doomed lookup on every single replay and never
+        // reaching the synchronous path above.
+        currentRef.current = null;
+        onStateChange?.({ phase: 'checking', reaction: null, caption: 'Preparing molecule structures…' });
+        ensureMoleculesResolved(entry.products).then(() => {
+          if (requestId !== resetGenerationRef.current) return;
+          applyEntry(entry);
+        });
+        return;
+      }
+
+      currentRef.current = null;
+      clearGroup(reactantGroupARef.current);
+      clearGroup(reactantGroupBRef.current);
+      productGroupsRef.current.forEach((g) => {
+        clearGroup(g);
+        rootRef.current.remove(g);
+      });
+      productGroupsRef.current = [];
+      if (signArrowRef.current) signArrowRef.current.visible = false;
+      if (signPlusProductsRef.current) signPlusProductsRef.current.visible = false;
+
+      // A cleared slot (the × on a reactant chip) sends an empty string
+      // here — nothing to ask the AI about yet, just show whichever
+      // reactant is still picked and wait for its replacement, rather than
+      // firing a pointless network call with half a pair.
+      if (!a || !b) {
+        if (a) addInstances(reactantGroupARef.current, a, 1);
+        if (b) addInstances(reactantGroupBRef.current, b, 1);
+        onStateChange?.({ phase: 'no-reaction', reaction: null, caption: '' });
+        return;
+      }
+
+      // Not a hand-authored pair (or a previously AI-discovered one, which
+      // findReaction also checks) — show the two reactants plainly while
+      // asking the AI backend whether they actually react at all.
+      addInstances(reactantGroupARef.current, a, 1);
+      addInstances(reactantGroupBRef.current, b, 1);
+      onStateChange?.({ phase: 'checking', reaction: null, caption: 'Asking Ion whether these react…' });
+
+      fetchReactionFromFormulas(a, b).then(async (aiEntry) => {
+        if (requestId !== resetGenerationRef.current) return;
+        cacheDiscoveredReaction(aiEntry);
+        // The reaction is real, but its products were only just named by
+        // the AI, not built through the atom tray (the only other path
+        // that resolves a molecule) — fetch real geometry/bonds for
+        // whichever ones aren't already known before rendering them,
+        // rather than showing an empty cloud where ZnCl2 should be.
+        await ensureMoleculesResolved(aiEntry.products);
+        if (requestId !== resetGenerationRef.current) return;
+        applyEntry(aiEntry);
+      }).catch((err) => {
+        if (requestId !== resetGenerationRef.current) return;
+        currentRef.current = null;
+        const reason = err instanceof ReactionNotPossibleError
+          ? err.message
+          : 'Could not determine whether these react — try again.';
+        onStateChange?.({ phase: 'no-reaction', reaction: null, caption: reason });
+      });
     }
 
     function applyCoefficients(next: number[] | null): void {
@@ -188,11 +320,23 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       resetChamber(reactantA, reactantB);
     }
 
-    // react/reset are plain closures over stable refs, recreated every
+    function play(): void {
+      resetChamber(reactantA, reactantB);
+      // Applied synchronously here (reading the current `coeffs` prop
+      // directly) rather than relying on the [coeffs] effect below, which
+      // only re-fires on a coeffs *change* — after a 'done' reaction the
+      // coeffs value is unchanged, so that effect wouldn't re-apply it and
+      // the replay would show resetChamber's 1-each preview instead of the
+      // actual balanced counts.
+      applyCoefficients(coeffs);
+      react();
+    }
+
+    // react/reset/play are plain closures over stable refs, recreated every
     // render — deliberately not memoized (they're cheap and the handle only
     // needs to expose the latest ones).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    useImperativeHandle(ref, () => ({ react, reset }), [reactantA, reactantB, onStateChange]);
+    useImperativeHandle(ref, () => ({ react, reset, play }), [reactantA, reactantB, coeffs, onStateChange]);
 
     // One-time scaffold: lights, groups, signage, backdrop, camera controls.
     // driveCamera=false (parked on a ChamberRoom wall) skips everything that
@@ -207,6 +351,8 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       const reactantGroupB = reactantGroupBRef.current;
       scene.add(root);
       if (roomOffset) root.position.set(...roomOffset);
+      if (roomRotationY) root.rotation.y = roomRotationY;
+      if (roomScale) root.scale.setScalar(roomScale);
       root.add(reactantGroupA, reactantGroupB);
 
       let grid: THREE.GridHelper | null = null;
@@ -262,6 +408,9 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       reactionLightRef.current = reactionLight;
 
       const signPlusReactants = makeSignSprite('+', '#8C9AB8');
+      // Placeholder — applyEntry always swaps this for the correct glyph
+      // (→ or ⇌) via setArrowGlyph before it's ever shown, so its initial
+      // text doesn't matter beyond starting hidden.
       const signArrow = makeSignSprite('→', '#2DD4BF');
       const signPlusProducts = makeSignSprite('+', '#8C9AB8');
       signPlusReactants.position.set(-4.6, 0.6, 0);
@@ -276,6 +425,23 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       return () => {
         detachControls?.();
         scene.remove(root);
+        // scene.remove only detaches `root` from the scene — it doesn't
+        // touch root's own children. rootRef is a stable ref, so in dev
+        // StrictMode's simulated unmount+remount, `root` is the SAME Group
+        // both times: without removing the sign sprites and reactionLight
+        // here first, the OLD ones (still holding whatever glyph/visibility
+        // applyEntry last set) stay behind as the remount adds a fresh set
+        // on top — exactly how an old arrow sprite ended up stuck visible
+        // behind the current one. Reactant/product groups don't need this:
+        // clearGroup below empties their *contents*, and the groups
+        // themselves are ref-stable and just get re-added, not duplicated.
+        root.remove(signPlusReactants, signPlusProducts, reactionLight);
+        [signPlusReactants, signPlusProducts, signArrowRef.current].forEach((sprite) => {
+          if (!sprite) return;
+          sprite.material.map?.dispose();
+          sprite.material.dispose();
+        });
+        if (signArrowRef.current) root.remove(signArrowRef.current);
         productGroupsRef.current.forEach((g) => clearGroup(g));
         clearGroup(reactantGroupA);
         clearGroup(reactantGroupB);
@@ -323,21 +489,21 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       const groupB = reactantGroupBRef.current;
 
       let caption: string;
-      if (t < 350) caption = 'Reactants collide…';
-      else if (t < 900) caption = `Breaking bonds: ${bondCaption([entry.a, entry.b])}`;
-      else if (t < 1150) caption = 'Atoms rearrange…';
+      if (t < T_COLLIDE) caption = 'Reactants collide…';
+      else if (t < T_BREAK_END) caption = `Breaking bonds: ${bondCaption([entry.a, entry.b])}`;
+      else if (t < T_REARRANGE_END) caption = 'Atoms rearrange…';
       else caption = `Forming bonds: ${bondCaption(entry.products)}`;
-      if (t < 2150 && caption !== current.caption) {
+      if (t < T_DONE && caption !== current.caption) {
         current.caption = caption;
         onStateChange?.({ phase: 'reacting', reaction: entry, caption });
       }
 
-      if (t < 900) {
+      if (t < T_BREAK_END) {
         // Reactant bonds snap while the molecules are still closing in.
-        const breakP = ease(clamp01((t - 350) / 500));
+        const breakP = ease(clamp01((t - T_COLLIDE) / BREAK_WINDOW));
         setBondScale(groupA, 1 - breakP);
         setBondScale(groupB, 1 - breakP);
-        const p = ease(Math.min(1, t / 900));
+        const p = ease(Math.min(1, t / T_BREAK_END));
         groupA.position.lerpVectors(ANCHOR_A, ZERO, p);
         groupB.position.lerpVectors(ANCHOR_B, ZERO, p);
         groupA.scale.setScalar(1 - 0.5 * p);
@@ -348,14 +514,12 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
         if (reactionLight) reactionLight.intensity = 8;
         setBondScale(groupA, 0);
         setBondScale(groupB, 0);
-        ghostGroup(groupA);
-        ghostGroup(groupB);
       }
 
-      if (t >= 900 && t < 2150) {
-        if (reactionLight) reactionLight.intensity = Math.max(0, 8 * (1 - (t - 900) / 500));
-        const p2 = ease(Math.min(1, (t - 900) / 1250));
-        const formP = ease(clamp01((t - 1150) / 1000));
+      if (t >= T_BREAK_END && t < T_DONE) {
+        if (reactionLight) reactionLight.intensity = Math.max(0, 8 * (1 - (t - T_BREAK_END) / LIGHT_FADE_WINDOW));
+        const p2 = ease(Math.min(1, (t - T_BREAK_END) / (T_DONE - T_BREAK_END)));
+        const formP = ease(clamp01((t - T_REARRANGE_END) / FORM_WINDOW));
         productGroupsRef.current.forEach((g) => setBondScale(g, formP));
         // Reactants settle back to their spot — they aren't erased, they became the products.
         groupA.position.lerpVectors(ZERO, ANCHOR_A, p2);
@@ -370,8 +534,16 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
         });
       }
 
-      if (t >= 2150) {
+      if (t >= T_DONE) {
         current.phase = 'done';
+        // Reactants settle back at full visibility (they're a "record of
+        // what went in", not erased — see the ghosting removal earlier this
+        // session) but their bond cylinders were scaled to 0 when they
+        // broke apart at the burst and — unlike the product groups just
+        // below — never got scaled back up, leaving the atoms floating
+        // with no visible bond between them.
+        setBondScale(groupA, 1);
+        setBondScale(groupB, 1);
         productGroupsRef.current.forEach((g) => setBondScale(g, 1));
         onStateChange?.({ phase: 'done', reaction: entry, caption: entry.note });
         // Smoothly settle back to the default framing, undoing any zoom the
@@ -396,7 +568,7 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
 
       for (let i = burstsRef.current.length - 1; i >= 0; i--) {
         const b = burstsRef.current[i];
-        const t = (now - b.start) / 550;
+        const t = (now - b.start) / BURST_DURATION;
         if (t >= 1) {
           rootRef.current.remove(b.mesh);
           b.mesh.geometry.dispose();

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toSubscript } from '../chemistry/formulas';
 import { answerIonQuestion, type ChatContext } from './answers';
 
@@ -7,11 +7,21 @@ interface ChatMessage { from: 'ion' | 'user'; text: string; }
 function greetingFor(ctx: ChatContext): string {
   if (ctx.kind === 'chamber') {
     return ctx.reaction
-      ? `Ask me about ${toSubscript(ctx.reactantA)} + ${toSubscript(ctx.reactantB)} — bonds, oxidation states, balancing, the reaction type, anything.`
+      ? `Ask me about ${toSubscript(ctx.reactantA)} + ${toSubscript(ctx.reactantB)} — bonds, energy change, conditions, catalyst, safety, lab steps, oxidation states, balancing, anything.`
       : "I don't have a reaction loaded for this pair, but ask away — I'll tell you what I can.";
   }
   if (ctx.kind === 'elements') return `Ask me about ${ctx.symbol} — its electron configuration, oxidation states, mass, or category.`;
   return "Head into the chamber or the atom explorer and I'll have more to say.";
+}
+
+/** Identity string for "is this genuinely a different thing to talk about" —
+ * a chamber context with the same reactant pair but, say, a different
+ * caption isn't a new topic; a different pair (or a pair that newly
+ * resolved/lost a reaction) is. */
+function contextIdentity(ctx: ChatContext): string {
+  if (ctx.kind === 'chamber') return `chamber:${ctx.reactantA}|${ctx.reactantB}|${ctx.reaction?.name ?? ''}`;
+  if (ctx.kind === 'elements') return `elements:${ctx.symbol}`;
+  return 'none';
 }
 
 export interface IonChatBodyProps {
@@ -33,6 +43,22 @@ export interface IonChatBodyProps {
 export function IonChatBody({ context, inputRef }: IonChatBodyProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => [{ from: 'ion', text: greetingFor(context) }]);
   const [input, setInput] = useState('');
+  const identityRef = useRef(contextIdentity(context));
+
+  // The panel itself never remounts as the student swaps reactants or picks
+  // a new element — it's a fixed wall fixture — so without this the log's
+  // opening line (and Ion's sense of "what are we looking at") would stay
+  // frozen on whatever was loaded when the panel first mounted. Re-greeting
+  // on a genuine topic change keeps every later answer grounded in what's
+  // actually in the chamber right now, while still leaving prior Q&A in
+  // place rather than wiping the conversation.
+  useEffect(() => {
+    const next = contextIdentity(context);
+    if (next !== identityRef.current) {
+      identityRef.current = next;
+      setMessages((m) => [...m, { from: 'ion', text: greetingFor(context) }]);
+    }
+  }, [context]);
 
   function send(): void {
     const question = input.trim();

@@ -17,6 +17,10 @@ export function makeSignSprite(text: string, color: string): THREE.Sprite {
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearFilter;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
-  sprite.scale.set(0.85, 0.85, 1);
+  // Scaled up from the original 0.85 — ReactionChamberModel now renders at
+  // CENTER_SCALE (0.26) inside ChamberRoom's compact wall, which shrank
+  // these connector symbols to the point of being hard to notice next to
+  // the molecules they separate.
+  sprite.scale.set(1.6, 1.6, 1);
   return sprite;
 }

@@ -1,6 +1,7 @@
 import { bondList, formatOxidation, oxidationBySymbol } from '../chemistry/bonds';
 import { ELEMENTS } from '../chemistry/elements';
 import { toSubscript } from '../chemistry/formulas';
+import { formatReactionType, reactionArrow } from '../chemistry/reactions';
 import type { ElementSymbol, Reaction } from '../chemistry/types';
 
 export type ChatContext =
@@ -72,10 +73,43 @@ export function answerIonQuestion(question: string, ctx: ChatContext): string {
     return states.length ? states.join('; ') + '.' : "I can't derive oxidation states without at least one polar or ionic bond here.";
   }
   if (q.includes('type') || q.includes('kind') || q.includes('what is this')) {
-    return `This is a ${reaction.type.toLowerCase()} reaction: ${reaction.name}.`;
+    return `This is a ${formatReactionType(reaction.type).toLowerCase()} reaction: ${reaction.name}.`;
   }
   if (q.includes('balanc')) {
-    return `The balanced equation is ${toSubscript(reactantA)} + ${toSubscript(reactantB)} → ${reaction.products.map(toSubscript).join(' + ')} once the coefficients line up — use the "Show solution" button if you want me to fill them in.`;
+    return `The balanced equation is ${toSubscript(reactantA)} + ${toSubscript(reactantB)} ${reactionArrow(reaction)} ${reaction.products.map(toSubscript).join(' + ')} once the coefficients line up — use the "Show solution" button if you want me to fill them in.`;
   }
-  return reaction.note;
+  // The rest of the reaction's own data — energy change, conditions,
+  // catalyst, reversibility, safety, lab steps — matches exactly what the
+  // Ion panel's Info/Steps tabs already show for this reaction, so the
+  // chat should be able to answer about it too rather than only bonds/
+  // oxidation/type/balancing.
+  if (q.includes('exotherm') || q.includes('endotherm') || q.includes('energy') || q.includes('heat')) {
+    return reaction.energyChange
+      ? `${reaction.name} is ${reaction.energyChange.toLowerCase()} — ${reaction.energyChange === 'Exothermic' ? 'it releases energy, usually as heat' : 'it absorbs energy from its surroundings'}.`
+      : "I don't have an established energy change on file for this reaction.";
+  }
+  if (q.includes('catalyst')) {
+    return reaction.catalyst
+      ? `${reaction.catalyst} acts as a catalyst here.`
+      : 'No catalyst is needed for this reaction.';
+  }
+  if (q.includes('condition') || q.includes('temperature') || q.includes('pressure')) {
+    return reaction.conditions
+      ? `This reaction needs ${reaction.conditions}.`
+      : "I don't have specific conditions on file — treat it as happening under normal room conditions unless told otherwise.";
+  }
+  if (q.includes('revers')) {
+    return reaction.reversible != null
+      ? (reaction.reversible ? `Yes — ${reaction.name} is reversible; the products can react back into the original reactants under the right conditions.` : `No — ${reaction.name} goes to completion and isn't meaningfully reversible.`)
+      : "I don't have reversibility established for this reaction.";
+  }
+  if (q.includes('safe') || q.includes('hazard') || q.includes('danger') || q.includes('caution')) {
+    return reaction.safetyNote ?? "No specific safety note on file for this one — still, always treat lab chemicals with standard care.";
+  }
+  if (q.includes('step') || q.includes('procedure') || q.includes('perform') || q.includes('demonstrat') || q.includes('lab')) {
+    return reaction.labSteps?.length
+      ? reaction.labSteps.map((s, i) => `${i + 1}. ${s}`).join(' ')
+      : "I don't have a lab procedure on file for this reaction yet.";
+  }
+  return reaction.whatsHappening || reaction.note;
 }

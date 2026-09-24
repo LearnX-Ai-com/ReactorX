@@ -1,10 +1,12 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { ELEMENT_LIST, type ElementData } from '../chemistry/elements';
-import { gridPosition, GRID_COLS } from '../chemistry/periodicTableLayout';
+import { gridPosition } from '../chemistry/periodicTableLayout';
 import { labelTexture } from './elementLabel';
+import {
+  colToX, DEFAULT_F_BLOCK_GAP, MAIN_TABLE_LAST_ROW, rowToY, verticalCenterOffset,
+} from './periodicTableGeometry';
 
-const SPACING = 0.5;
 const TILE_SIZE = 0.44;
 // A real box, not a wafer — the whole point is that this reads as a
 // specimen block sitting on the wall, not a flat card. Front face (+Z,
@@ -20,20 +22,6 @@ function darken(hex: number, factor: number): number {
   const b = Math.round((hex & 0xff) * factor);
   return (r << 16) | (g << 8) | b;
 }
-
-function colToX(col: number): number {
-  return (col - (GRID_COLS + 1) / 2) * SPACING;
-}
-// Row 1 (period 1) maps to the top; rows 9-10 (the f-block overflow rows)
-// get a bit of extra breathing room below the main table, same spirit as
-// the flat picker's blank CSS grid row.
-function rowToY(row: number): number {
-  const gap = row >= 9 ? SPACING * 0.6 : 0;
-  return -(row - 1) * SPACING - gap;
-}
-// Shifts the whole grid up so it's vertically centered on `center` rather
-// than hanging entirely below it.
-const VERTICAL_CENTER_OFFSET = -rowToY(10) / 2;
 
 export interface ElementTileProps {
   el: ElementData;
@@ -116,6 +104,19 @@ export interface PeriodicTableRoomProps {
   /** True for a symbol that fails the active search/category filter (see
    * chemistry/elementFilter.ts) — undefined/omitted means no filter active. */
   dim?: (symbol: string) => boolean;
+  /** Extra world-unit gap between the main table and the f-block rows, on
+   * top of the normal one-row spacing — see rowToY's comment. Defaults to
+   * the small cosmetic gap every instance used before this was
+   * configurable (ElementsRoom doesn't pass this, so it's unaffected).
+   * Meaningless when excludeFBlock is set. */
+  fBlockGap?: number;
+  /** Drops the lanthanides/actinides (rows 9-10) entirely — not used, not
+   * rendered, not clickable. For a surface where picking a reactant is the
+   * point (the chamber) rather than browsing every element (the atom
+   * explorer, which doesn't set this): those 30 elements never come up in
+   * the reactions this app supports, and removing them shrinks the table
+   * to a clean 7-row grid with no leftover gap-row bookkeeping. */
+  excludeFBlock?: boolean;
   onSelectElement: (symbol: string) => void;
 }
 
@@ -125,20 +126,26 @@ export interface PeriodicTableRoomProps {
  * same period/group layout as the flat picker (chemistry/periodicTableLayout),
  * just built from meshes instead of DOM nodes so it lives in the room.
  */
-export function PeriodicTableRoom({ center, rotation, selected, dim, onSelectElement }: PeriodicTableRoomProps) {
+export function PeriodicTableRoom({
+  center, rotation, selected, dim, fBlockGap = DEFAULT_F_BLOCK_GAP, excludeFBlock, onSelectElement,
+}: PeriodicTableRoomProps) {
   const isSelected = (symbol: string): boolean => (
     Array.isArray(selected) ? selected.includes(symbol) : symbol === selected
   );
+  const elements = excludeFBlock
+    ? ELEMENT_LIST.filter((el) => el.category !== 'lanthanide' && el.category !== 'actinide')
+    : ELEMENT_LIST;
+  const offset = verticalCenterOffset(fBlockGap, excludeFBlock ? MAIN_TABLE_LAST_ROW : undefined);
   return (
     <group position={center} rotation={rotation}>
-      {ELEMENT_LIST.map((el) => {
+      {elements.map((el) => {
         const { row, col } = gridPosition(el);
         return (
           <ElementTile
             key={el.symbol}
             el={el}
             x={colToX(col)}
-            y={rowToY(row) + VERTICAL_CENTER_OFFSET}
+            y={rowToY(row, fBlockGap) + offset}
             isSelected={isSelected(el.symbol)}
             dimmed={dim?.(el.symbol)}
             onSelectElement={onSelectElement}

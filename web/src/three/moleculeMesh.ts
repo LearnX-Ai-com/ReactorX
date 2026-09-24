@@ -29,7 +29,20 @@ export function getSphereMat(el: ElementSymbol): THREE.MeshStandardMaterial {
 const bondMatCovalent = new THREE.MeshStandardMaterial({ color: 0xaeb9d4, roughness: 0.5, metalness: 0.05 });
 const bondMatIonic = new THREE.MeshStandardMaterial({ color: 0xf5a524, roughness: 0.4, metalness: 0.05, emissive: 0x7a4a0a, emissiveIntensity: 0.5 });
 
-export function buildBond(posA: [number, number, number], posB: [number, number, number], type: BondType, order?: number): THREE.Mesh[] {
+/**
+ * `atomRadius` is the smaller of the two bonded atoms' own sphere radii
+ * (ELEMENTS[el].r) — bond thickness is a fraction of THAT, not a flat
+ * number. A fixed absolute radius (what this used to be) can only ever be
+ * tuned right for one atom pair at a time: thick enough for a Cl-Cl bond
+ * reads as a hair next to an actual H atom, and any single fixed number
+ * left H-containing bonds (H2, HCl, H2O, ...) looking bond-less at a glance
+ * even after bumping it once already. Scaling with the atom itself makes
+ * every bond a consistent, clearly-visible fraction of what it's attached
+ * to, for any element pair, without re-tuning per formula.
+ */
+export function buildBond(
+  posA: [number, number, number], posB: [number, number, number], type: BondType, order: number | undefined, atomRadius: number,
+): THREE.Mesh[] {
   const a = new THREE.Vector3(...posA);
   const b = new THREE.Vector3(...posB);
   const dir = new THREE.Vector3().subVectors(b, a);
@@ -42,11 +55,11 @@ export function buildBond(posA: [number, number, number], posB: [number, number,
     // thinner parallel cylinders rather than one bond of the same thickness —
     // otherwise a double bond looks structurally identical to a single one.
     const n = order || 1;
-    const radius = n === 1 ? 0.09 : 0.075;
+    const radius = (n === 1 ? 0.55 : 0.42) * atomRadius;
     const geo = new THREE.CylinderGeometry(radius, radius, len, 8);
     const axis = dir.clone().normalize();
     const arbitrary = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const perp = new THREE.Vector3().crossVectors(axis, arbitrary).normalize().multiplyScalar(0.16);
+    const perp = new THREE.Vector3().crossVectors(axis, arbitrary).normalize().multiplyScalar(0.85 * atomRadius);
     const meshes: THREE.Mesh[] = [];
     for (let k = 0; k < n; k++) {
       const mesh = new THREE.Mesh(geo, bondMatCovalent);
@@ -62,7 +75,8 @@ export function buildBond(posA: [number, number, number], posB: [number, number,
   // does. Ionic bonding is electrostatic rather than discrete shared pairs,
   // so it always renders as one line regardless of how many electrons
   // actually transfer.
-  const geo = new THREE.CylinderGeometry(0.11, 0.11, len, 8);
+  const radius = 0.62 * atomRadius;
+  const geo = new THREE.CylinderGeometry(radius, radius, len, 8);
   const mesh = new THREE.Mesh(geo, bondMatIonic);
   mesh.position.copy(mid);
   mesh.quaternion.copy(quat);
@@ -86,7 +100,8 @@ export function buildMoleculeMesh(formula: string): THREE.Group {
     group.add(mesh);
   });
   def.bonds.forEach(([i, j, type, count]) => {
-    buildBond(def.atoms[i].pos, def.atoms[j].pos, type, count).forEach((m) => {
+    const atomRadius = Math.min(ELEMENTS[def.atoms[i].el].r, ELEMENTS[def.atoms[j].el].r);
+    buildBond(def.atoms[i].pos, def.atoms[j].pos, type, count, atomRadius).forEach((m) => {
       m.userData.bondType = type;
       m.userData.elementA = def.atoms[i].el;
       m.userData.elementB = def.atoms[j].el;
@@ -159,23 +174,3 @@ export function setBondScale(group: THREE.Object3D, s: number): void {
   });
 }
 
-const ghostMatCache = new Map<THREE.Material, THREE.Material>();
-function ghostOf(mat: THREE.Material): THREE.Material {
-  let g = ghostMatCache.get(mat);
-  if (!g) {
-    g = mat.clone();
-    (g as THREE.MeshStandardMaterial).transparent = true;
-    (g as THREE.MeshStandardMaterial).opacity = 0.55;
-    ghostMatCache.set(mat, g);
-  }
-  return g;
-}
-
-/** Reactants aren't erased once consumed — their atoms became the products —
- * so they stay in place as semi-transparent (but still clickable) ghosts, a
- * record of what went in. */
-export function ghostGroup(group: THREE.Object3D): void {
-  group.traverse((o) => {
-    if (o instanceof THREE.Mesh && !o.userData?.bondType) o.material = ghostOf(o.material as THREE.Material);
-  });
-}

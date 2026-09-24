@@ -1,3 +1,4 @@
+import { Stars } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
@@ -33,7 +34,7 @@ export interface ElementsRoomProps {
  */
 export function ElementsRoom({ symbol, onSelectElement, ionWaveKey, onIonClick, onInspect }: ElementsRoomProps) {
   const { scene, camera, gl } = useThree();
-  const lookRef = useRef<LookState>({ yaw: 0, pitch: 0 });
+  const lookRef = useRef<LookState>({ yaw: 0, pitch: 0, zoomOffset: 0 });
 
   useEffect(() => {
     const perspectiveCamera = camera as THREE.PerspectiveCamera;
@@ -74,14 +75,17 @@ export function ElementsRoom({ symbol, onSelectElement, ionWaveKey, onIonClick, 
   }, []);
 
   useFrame(() => {
-    const eye = new THREE.Vector3(0, EYE_HEIGHT, 0);
-    camera.position.copy(eye);
-    const { yaw, pitch } = lookRef.current;
+    const { yaw, pitch, zoomOffset } = lookRef.current;
     const dir = new THREE.Vector3(
       Math.sin(yaw) * Math.cos(pitch),
       Math.sin(pitch),
       -Math.cos(yaw) * Math.cos(pitch),
     );
+    // Pinch dolly (two-finger touch, see lookControls.ts) — same treatment
+    // as ChamberRoom, just dollying from this room's fixed standing spot
+    // instead of a lerped wall-focus target.
+    const eye = new THREE.Vector3(0, EYE_HEIGHT, 0).addScaledVector(dir, zoomOffset);
+    camera.position.copy(eye);
     camera.lookAt(eye.clone().add(dir));
   });
 
@@ -93,6 +97,7 @@ export function ElementsRoom({ symbol, onSelectElement, ionWaveKey, onIonClick, 
 
   return (
     <>
+      <Stars radius={60} depth={50} count={3500} factor={3.5} saturation={0.3} fade speed={0.4} />
       <PeriodicTableRoom center={TABLE_WALL} selected={symbol} onSelectElement={onSelectElement} />
       <BohrAtomModel symbol={symbol} driveCamera={false} roomOffset={ATOM_WALL} />
       <ElementPlaque symbol={symbol} position={plaquePosition} onAskIon={onIonClick} onInspect={onInspect} />

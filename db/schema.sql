@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS reactions (
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_review_status ON reactions (review_status);
 CREATE INDEX IF NOT EXISTS idx_reactions_type ON reactions (reaction_type);
+-- AI-predicted reaction cache key: `reactants` is stored pre-sorted so an
+-- order-independent pair lookup ("A+B" and "B+A" are the same reaction)
+-- lands on the same row; used as the ON CONFLICT target for the Tier-2 AI
+-- reaction lookup in functions/src/index.ts.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reactions_pair ON reactions (reactants, grade_band);
 
 -- Half-reactions for redox visualization (electron transfer, oxidation-state change).
 CREATE TABLE IF NOT EXISTS redox_half_reactions (
