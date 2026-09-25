@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import './App.css';
 import { ParticleInfoCard } from './components/ParticleInfoCard';
-import { ATOMIC_NAMES } from './chemistry/elements';
 import { standardElementalForm } from './chemistry/standardForm';
 import { toSubscript, canonicalFormula } from './chemistry/formulas';
 import { balanceEquation } from './chemistry/balance';
@@ -13,15 +12,16 @@ import type { CategoryFilter } from './chemistry/elementFilter';
 import type { ElementSymbol, Reaction, ReactantSlot, TrayCard } from './chemistry/types';
 import { AppCanvas } from './three/AppCanvas';
 import { HubScene } from './three/HubScene';
-import { Ion } from './three/Ion';
 import {
   BohrAtomModel, type BohrAtomHandle, type BohrSceneState,
   JUMP_OUT_MS, JUMP_HOLD_MS, JUMP_BACK_MS,
 } from './three/BohrAtom';
 import type { ChamberPhase, ChamberSnapshot, ReactionChamberHandle } from './three/ReactionChamber';
 import { ChamberRoom, type WallFocus } from './three/ChamberRoom';
-import { ElementsRoom } from './three/ElementsRoom';
-import { ELEMENTS_ION_DOCK } from './three/layout';
+import { ElementsRoom, type WallFocus as ElementsWallFocus } from './three/ElementsRoom';
+import { BondDetail, BondStoryPanel, MoleculeOverview, type MoleculeFocus } from './three/MoleculeDetailCard';
+import { MoleculeViewerModel, type MoleculeBondHit } from './three/MoleculeViewer';
+import { BondStoryViewerModel, type BondStoryViewerHandle } from './three/BondStoryViewer';
 import { IonChatBody } from './ion/ChatBody';
 import type { ChatContext } from './ion/answers';
 import { speak } from './ion/speech';
@@ -55,6 +55,49 @@ function useChamberController() {
   const prevPhaseRef = useRef<ChamberSnapshot['phase']>('no-reaction');
 
   const { reaction, phase, caption } = snapshot;
+
+  // ---- Molecule detail view: tapping a reactant/product (or a bond on it)
+  // opens a full-screen view with a tab per constituent element plus a
+  // "Molecule" tab — mirrors the original single-file prototype's
+  // openDetailView, reusing BohrAtomModel/ParticleInfoCard for the element
+  // tabs (the same components the standalone Inspect mode already uses)
+  // instead of building a second atom-detail screen from scratch.
+  const [detail, setDetail] = useState<{ focus: MoleculeFocus; tab: string } | null>(null);
+  const [detailAtomState, setDetailAtomState] = useState<BohrSceneState>({ mode: 'atom' });
+  const [detailJumpBusy, setDetailJumpBusy] = useState(false);
+  const detailBohrRef = useRef<BohrAtomHandle>(null);
+  const bondStoryRef = useRef<BondStoryViewerHandle>(null);
+  function replayBondStory(): void {
+    bondStoryRef.current?.replay();
+  }
+
+  function openDetail(focus: MoleculeFocus): void {
+    setDetail({ focus, tab: 'molecule' });
+    setDetailAtomState({ mode: 'atom' });
+  }
+  function closeDetail(): void {
+    setDetail(null);
+  }
+  function setDetailTab(tab: string): void {
+    setDetail((d) => (d ? { ...d, tab } : d));
+    setDetailAtomState({ mode: 'atom' });
+  }
+  function backToMoleculeOverview(): void {
+    setDetail((d) => (d ? { ...d, focus: { kind: 'molecule', formula: d.focus.formula } } : d));
+  }
+  function handleDetailBondTap(hit: MoleculeBondHit): void {
+    setDetail((d) => (d ? { ...d, focus: { kind: 'bond', formula: d.focus.formula, ...hit } } : d));
+  }
+  function handleDetailAtomTap(symbol: ElementSymbol): void {
+    setDetail((d) => (d ? { ...d, tab: symbol } : d));
+    setDetailAtomState({ mode: 'atom' });
+  }
+  function triggerDetailJump(): void {
+    const result = detailBohrRef.current?.triggerJump();
+    if (!result) return;
+    setDetailJumpBusy(true);
+    window.setTimeout(() => setDetailJumpBusy(false), JUMP_OUT_MS + JUMP_HOLD_MS + JUMP_BACK_MS + 700);
+  }
 
   function handleChamberState(s: ChamberSnapshot): void {
     setSnapshot(s);
@@ -261,12 +304,33 @@ function useChamberController() {
     elementCategory, setElementCategory,
     focusWall, focusKey, requestFocus,
     panelOpen, toggleMinimized, zoomed,
+    detail, openDetail, closeDetail, setDetailTab, backToMoleculeOverview,
+    handleDetailBondTap, handleDetailAtomTap,
+    detailAtomState, setDetailAtomState, detailBohrRef, detailJumpBusy, triggerDetailJump,
+    bondStoryRef, replayBondStory,
   };
 }
 
 type ChamberController = ReturnType<typeof useChamberController>;
 
 function ChamberSceneContent({ c }: { c: ChamberController }) {
+  if (c.detail) {
+    const { focus, tab } = c.detail;
+    if (tab === 'molecule') {
+      return <MoleculeViewerModel formula={focus.formula} onBondTap={c.handleDetailBondTap} onAtomTap={c.handleDetailAtomTap} />;
+    }
+    if (tab === 'bond') {
+      return <BondStoryViewerModel ref={c.bondStoryRef} formula={focus.formula} />;
+    }
+    return (
+      <BohrAtomModel
+        ref={c.detailBohrRef}
+        symbol={tab as ElementSymbol}
+        onStateChange={c.setDetailAtomState}
+        viewMode="bohr"
+      />
+    );
+  }
   return (
     <ChamberRoom
       chamberRef={c.chamberRef}
@@ -286,6 +350,7 @@ function ChamberSceneContent({ c }: { c: ChamberController }) {
       focusWall={c.focusWall}
       focusKey={c.focusKey}
       zoomed={c.zoomed}
+      onOpenDetail={c.openDetail}
     />
   );
 }
@@ -506,6 +571,115 @@ function MiniReactionCard({
   );
 }
 
+/** One pill per constituent element, plus "🧬 Molecule" and (only when the
+ * molecule actually has bonds — a lone atom doesn't) "⚡ Bonds" — the same
+ * accent-on-active pill styling WallFocusPills/ViewModePills already use
+ * elsewhere in this app, just switching which of MoleculeDetailOverlay's
+ * panes is shown instead of a camera wall or a Bohr view mode. */
+function MoleculeDetailTabBar({ elements, tab, onSelect, hasBonds }: {
+  elements: ElementSymbol[];
+  tab: string;
+  onSelect: (tab: string) => void;
+  hasBonds: boolean;
+}) {
+  return (
+    <div className="detail-tabs">
+      {elements.map((el) => (
+        <button
+          key={el}
+          type="button"
+          className={tab === el ? 'wall-focus-pill wall-focus-pill-active' : 'wall-focus-pill'}
+          onClick={() => onSelect(el)}
+        >
+          {el}
+        </button>
+      ))}
+      <button
+        type="button"
+        className={tab === 'molecule' ? 'wall-focus-pill wall-focus-pill-active' : 'wall-focus-pill'}
+        onClick={() => onSelect('molecule')}
+      >
+        🧬 Molecule
+      </button>
+      {hasBonds && (
+        <button
+          type="button"
+          className={tab === 'bond' ? 'wall-focus-pill wall-focus-pill-active' : 'wall-focus-pill'}
+          onClick={() => onSelect('bond')}
+        >
+          ⚡ Bonds
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Full-screen molecule detail view — opened by tapping a reactant/product
+ * (or a bond on one) in the chamber (ChamberRoom's onOpenDetail). Ported
+ * from the original single-file prototype's openDetailView/.detail-view: a
+ * tab per constituent element (reusing the same BohrAtomModel/
+ * ParticleInfoCard machinery the standalone Inspect mode already uses,
+ * rather than a second atom-detail screen), a "Molecule" tab showing the
+ * ball-and-stick structure and its own click-a-bond drill-down
+ * (MoleculeViewerModel + MoleculeOverview/BondDetail), and a "Bonds" tab
+ * animating every one of the molecule's bonds at once — the shared pair or
+ * transferred electron(s) physically moving, ending in real ion notation
+ * for an ionic bond (BondStoryViewerModel + BondStoryPanel).
+ */
+function MoleculeDetailOverlay({ c, onOpenChat }: { c: ChamberController; onOpenChat: () => void }) {
+  const detail = c.detail;
+  if (!detail) return null;
+  const { focus, tab } = detail;
+  const def = getKnownMolecule(focus.formula);
+  const elementList = def ? Array.from(new Set(def.atoms.map((a) => a.el))) : [];
+  const hasBonds = !!def?.bonds.length;
+
+  return (
+    <>
+      <div className="detail-header">
+        <button type="button" className="icon-btn" onClick={c.closeDetail} aria-label="Back to chamber">{'←'}</button>
+        <div className="detail-header-text">
+          <div className="detail-header-label">Compound</div>
+          <div className="detail-header-formula">{toSubscript(focus.formula)}</div>
+        </div>
+      </div>
+
+      <MoleculeDetailTabBar elements={elementList} tab={tab} onSelect={c.setDetailTab} hasBonds={hasBonds} />
+
+      {tab === 'molecule' && (
+        <div className="molecule-card molecule-detail-card">
+          {focus.kind === 'molecule'
+            ? <MoleculeOverview formula={focus.formula} onInspectElement={c.setDetailTab} />
+            : <BondDetail focus={focus} onBack={c.backToMoleculeOverview} onInspectElement={c.setDetailTab} />}
+        </div>
+      )}
+      {tab === 'bond' && (
+        <div className="molecule-card molecule-detail-card">
+          <BondStoryPanel formula={focus.formula} />
+          <button type="button" className="chip molecule-card-replay" onClick={c.replayBondStory}>
+            {'↻'} Replay
+          </button>
+        </div>
+      )}
+      {tab !== 'molecule' && tab !== 'bond' && (
+        <ParticleInfoCard
+          symbol={tab as ElementSymbol}
+          state={c.detailAtomState}
+          onEnterQuark={(nucleonType) => c.detailBohrRef.current?.enterQuark(nucleonType)}
+          onExitQuark={() => c.detailBohrRef.current?.exitQuark()}
+          onTriggerJump={c.triggerDetailJump}
+          jumpDisabled={c.detailJumpBusy}
+        />
+      )}
+
+      <button type="button" className="ask-ion-btn" onClick={onOpenChat}>
+        <span className="ion-dot" /> Ask Ion
+      </button>
+    </>
+  );
+}
+
 /**
  * Phase-based dock: only what's relevant to the current step is on screen
  * at once, so the panel stays slim regardless of how far along a student
@@ -518,7 +692,11 @@ function MiniReactionCard({
  * minimized always shows the compact equation card regardless of which
  * wall is focused, since there's no picker UI to switch to there anyway.
  */
-function ChamberOverlay({ c, onBack }: { c: ChamberController; onBack: () => void }) {
+function ChamberOverlay({ c, onBack, onOpenChat }: { c: ChamberController; onBack: () => void; onOpenChat: () => void }) {
+  if (c.detail) {
+    return <MoleculeDetailOverlay c={c} onOpenChat={onOpenChat} />;
+  }
+
   const { reaction, coeffs, phase, check, panelOpen, focusWall } = c;
 
   function changeReactants(): void {
@@ -727,6 +905,8 @@ function ChamberOverlay({ c, onBack }: { c: ChamberController; onBack: () => voi
 
 type ElementsMode = 'room' | 'inspect';
 
+type BohrViewMode = 'bohr' | 'cloud' | 'lewis' | 'ionize';
+
 function useElementsController() {
   const [symbol, setSymbol] = useState<ElementSymbol>('Fe');
   const [mode, setMode] = useState<ElementsMode>('room');
@@ -734,15 +914,35 @@ function useElementsController() {
   const [ionWaveKey, setIonWaveKey] = useState(0);
   const [narration, setNarration] = useState<string | null>(null);
   const [jumpBusy, setJumpBusy] = useState(false);
+  const [viewMode, setViewMode] = useState<BohrViewMode>('bohr');
+  const [charge, setCharge] = useState(0);
   const bohrRef = useRef<BohrAtomHandle>(null);
+
+  // ---- Wall-focus camera (room mode only) — a chip click just turns the
+  // camera to face that wall from the room's fixed standing spot, no zoom
+  // (see ElementsRoom.tsx's module doc for why, unlike the chamber's dock).
+  const [focusWall, setFocusWall] = useState<ElementsWallFocus>('center');
+  const [focusKey, setFocusKey] = useState(0);
+  function requestFocus(wall: ElementsWallFocus): void {
+    setFocusWall(wall);
+    setFocusKey((k) => k + 1);
+  }
 
   function pickSymbol(s: string): void {
     setIonWaveKey((k) => k + 1);
     setSymbol(s as ElementSymbol);
   }
+  // Fresh guidance toast every time Inspect mode is entered (not just the
+  // first ever) — fades on its own after 30s (see .inspect-toast, App.css,
+  // whose CSS animation is timed to match). Set directly here, at the
+  // actual event that causes the entry, rather than reactively in an
+  // effect watching `mode` in ElementsOverlay.
+  const [showInspectToast, setShowInspectToast] = useState(false);
   function enterInspect(): void {
     setState({ mode: 'atom' });
     setMode('inspect');
+    setShowInspectToast(true);
+    window.setTimeout(() => setShowInspectToast(false), 30000);
   }
   function exitInspect(): void {
     setMode('room');
@@ -779,27 +979,91 @@ function useElementsController() {
   return {
     symbol, mode, state, setState, ionWaveKey, narration, jumpBusy, bohrRef,
     pickSymbol, enterInspect, exitInspect, triggerJumpDemo,
+    focusWall, focusKey, requestFocus, showInspectToast,
+    viewMode, setViewMode, charge, setCharge,
   };
 }
 
 type ElementsController = ReturnType<typeof useElementsController>;
 
-function ElementsSceneContent({ e, onIonClick }: { e: ElementsController; onIonClick: () => void }) {
+function ElementsSceneContent({ e }: { e: ElementsController }) {
   if (e.mode === 'inspect') {
-    return (
-      <>
-        <BohrAtomModel ref={e.bohrRef} symbol={e.symbol} onStateChange={e.setState} />
-        <Ion variant="small" position={ELEMENTS_ION_DOCK} smallPosition={ELEMENTS_ION_DOCK} waveKey={e.ionWaveKey} onClick={onIonClick} />
-      </>
-    );
+    // No Ion mascot here (unlike room mode) — "Ask Ion" is a plain 2D
+    // button in ElementsOverlay instead, same pattern the chamber's
+    // molecule detail view already uses. The atom itself is the whole
+    // point of this screen; a floating character over it was competing
+    // for attention rather than adding to it.
+    return <BohrAtomModel ref={e.bohrRef} symbol={e.symbol} onStateChange={e.setState} viewMode={e.viewMode} onChargeChange={e.setCharge} />;
   }
   return (
-    <ElementsRoom symbol={e.symbol} onSelectElement={e.pickSymbol} ionWaveKey={e.ionWaveKey} onIonClick={onIonClick} onInspect={e.enterInspect} />
+    <ElementsRoom
+      symbol={e.symbol}
+      onSelectElement={e.pickSymbol}
+      ionWaveKey={e.ionWaveKey}
+      focusWall={e.focusWall}
+      focusKey={e.focusKey}
+      onInspect={e.enterInspect}
+    />
   );
 }
 
-function ElementsOverlay({ e, onBack }: { e: ElementsController; onBack: () => void }) {
-  const [panelOpen, setPanelOpen] = useState(true);
+/** Wall-focus shortcuts for the elements room — same component shape as
+ * the chamber's WallFocusPills, just with this room's own wall assignment
+ * (table is center here, not a side wall) and labels. */
+function ElementsWallFocusPills({ e }: { e: ElementsController }) {
+  return (
+    <div className="wall-focus-pills">
+      {(['left', 'center', 'right'] as const).map((wall) => (
+        <button
+          key={wall}
+          type="button"
+          className={e.focusWall === wall ? 'wall-focus-pill wall-focus-pill-active' : 'wall-focus-pill'}
+          onClick={() => e.requestFocus(wall)}
+        >
+          {wall === 'left' ? 'Atom' : wall === 'center' ? 'Table' : 'Info'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Bohr/quantum-cloud/Lewis view-mode toggle for Inspect mode — same
+ * pill-row shape as the wall-focus pills, just switching how the atom
+ * itself is drawn rather than the camera. */
+function ViewModePills({ e }: { e: ElementsController }) {
+  return (
+    <div className="wall-focus-pills">
+      {(['bohr', 'cloud', 'lewis', 'ionize'] as const).map((mode) => (
+        <button
+          key={mode}
+          type="button"
+          className={e.viewMode === mode ? 'wall-focus-pill wall-focus-pill-active' : 'wall-focus-pill'}
+          onClick={() => e.setViewMode(mode)}
+        >
+          {mode === 'bohr' ? 'Bohr' : mode === 'cloud' ? 'Cloud' : mode === 'lewis' ? 'Lewis' : 'Ionize'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Transient guidance shown on entering Inspect mode, fading out on its
+ * own — replaces what used to be permanent static text in the (now
+ * always-minimized, see ElementsOverlay) bottom dock. e.showInspectToast is
+ * set directly by enterInspect() (useElementsController) every time
+ * Inspect mode is entered, not just the first ever. */
+function InspectEntryToast() {
+  return (
+    <div className="inspect-toast">
+      <span className="ion-dot" />
+      <p>Click a particle or shell ring to learn what it does. Tap &quot;Ask Ion&quot; for questions.</p>
+    </div>
+  );
+}
+
+function ElementsOverlay({ e, onBack, onOpenChat }: { e: ElementsController; onBack: () => void; onOpenChat: () => void }) {
+  const roomMode = e.mode === 'room';
+
   return (
     <>
       {e.mode === 'inspect' && (
@@ -811,6 +1075,10 @@ function ElementsOverlay({ e, onBack }: { e: ElementsController; onBack: () => v
             onExitQuark={() => e.bohrRef.current?.exitQuark()}
             onTriggerJump={e.triggerJumpDemo}
             jumpDisabled={e.jumpBusy}
+            charge={e.charge}
+            isIonize={e.viewMode === 'ionize'}
+            onAddElectron={() => e.bohrRef.current?.addElectron()}
+            onResetIons={() => e.bohrRef.current?.resetIons()}
           />
           {e.narration && (
             <div className="jump-narration">
@@ -818,40 +1086,32 @@ function ElementsOverlay({ e, onBack }: { e: ElementsController; onBack: () => v
               <p>{e.narration}</p>
             </div>
           )}
+          {e.showInspectToast && !e.narration && <InspectEntryToast />}
+          <button type="button" className="ask-ion-btn ask-ion-btn-top" onClick={onOpenChat}>
+            <span className="ion-dot" /> Ask Ion
+          </button>
         </>
       )}
 
-      <div className={panelOpen ? 'hud-dock' : 'hud-dock hud-dock-collapsed'}>
-        <button
-          type="button"
-          className="icon-btn icon-btn-back"
-          onClick={e.mode === 'inspect' ? e.exitInspect : onBack}
-          aria-label={e.mode === 'inspect' ? 'Back to room' : 'Back to hub'}
-        >
-          {'←'}
-        </button>
-        <button
-          type="button"
-          className="icon-btn icon-btn-toggle"
-          onClick={() => setPanelOpen((o) => !o)}
-          aria-label={panelOpen ? 'Minimize panel' : 'Expand panel'}
-        >
-          {panelOpen ? '−' : '+'}
-        </button>
-        {panelOpen && (
-          <>
-            {e.mode === 'room' ? (
-              <div className="row">
-                <p className="note">Turn to look around the room — the periodic table is in front of you, {ATOMIC_NAMES[e.symbol]} is on your right. Click a tile to change it.</p>
-                <button type="button" className="chip chip-accent" onClick={e.enterInspect}>
-                  {'🔎'} Inspect {e.symbol}
-                </button>
-              </div>
-            ) : (
-              <p className="note">Click a particle or shell ring to learn what it does. Click Ion for questions.</p>
-            )}
-          </>
-        )}
+      {/* Both modes stay permanently compact now — room mode's own "which
+       * element + Inspect" content lives in a floating panel above the
+       * table (ElementsRoom.tsx's TableStatusPanel), and Inspect mode's
+       * former expanded note is the transient toast above instead — so
+       * neither has anything left to expand into, and no minimize/expand
+       * toggle is needed for either. */}
+      <div className="hud-dock hud-dock-inline-top hud-dock-mini">
+        <div className="hud-top-row">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={e.mode === 'inspect' ? e.exitInspect : onBack}
+            aria-label={e.mode === 'inspect' ? 'Back to room' : 'Back to hub'}
+          >
+            {'←'}
+          </button>
+          {roomMode && <ElementsWallFocusPills e={e} />}
+          {e.mode === 'inspect' && <ViewModePills e={e} />}
+        </div>
       </div>
     </>
   );
@@ -885,24 +1145,19 @@ interface HubItem {
   icon: string;
   label: string;
   line: string;
-  soon?: boolean;
 }
 
+// Both entries are now rotating 3D objects in HubScene (tap to navigate —
+// see App()'s onSelectChamber/onSelectElements), not 2D cards — this array
+// only supplies the message/label text pickHubItem puts on the speech
+// bubble/status bar, regardless of which 3D object triggered the pick.
+// Redox/Electrolysis (previously disabled "soon" cards) are gone entirely.
 const HUB_LEFT: HubItem[] = [
   { key: 'chamber', icon: '⚗️', label: 'Reaction Chamber', line: "Let's react something! Pick two elements and I'll show you what happens." },
   { key: 'elements', icon: '🔬', label: 'Explore Elements', line: 'Every element has a story. Tap one and I’ll take you inside its atom.' },
 ];
 
-function Hub({ onNavigate, waveKey }: { onNavigate: (v: View) => void; waveKey: number }) {
-  const [message, setMessage] = useState("Hi, I'm Ion. Where should we start?");
-  const [label, setLabel] = useState('Choose where to start');
-
-  function handlePick(item: HubItem): void {
-    setMessage(item.line);
-    setLabel(item.label);
-    onNavigate(item.key);
-  }
-
+function Hub({ message, label, waveKey }: { message: string; label: string; waveKey: number }) {
   return (
     <div className="hub-overlay">
       <div className="hub-eyebrow">
@@ -910,34 +1165,14 @@ function Hub({ onNavigate, waveKey }: { onNavigate: (v: View) => void; waveKey: 
         <b>Ion&apos;s Lab</b>
       </div>
 
-      <div className="nameplate">
-        <span className="nameplate-dot" />
-        <span>{label}</span>
-      </div>
-
-      <nav className="menu left">
-        {HUB_LEFT.map((item) => (
-          <button key={item.key} type="button" className="menu-item" onClick={() => handlePick(item)}>
-            <span className="menu-icon">{item.icon}</span>
-            <span className="menu-label">{item.label}</span>
-          </button>
-        ))}
-        <button type="button" className="menu-item soon" disabled>
-          <span className="menu-icon">{'⚡'}</span>
-          <span className="menu-label">Redox &middot; soon</span>
-        </button>
-      </nav>
-
-      <nav className="menu right">
-        <button type="button" className="menu-item soon" disabled>
-          <span className="menu-icon">{'🔋'}</span>
-          <span className="menu-label">Electrolysis &middot; soon</span>
-        </button>
-      </nav>
-
       <div className="hub-bubble" key={waveKey}>
         <span className="ion-dot" />
         <p>{message}</p>
+      </div>
+
+      <div className="hub-startbar">
+        <span className="nameplate-dot" />
+        <span>{label}</span>
       </div>
     </div>
   );
@@ -948,6 +1183,12 @@ function Hub({ onNavigate, waveKey }: { onNavigate: (v: View) => void; waveKey: 
 function App() {
   const [view, setView] = useState<View>('home');
   const [hubWaveKey, setHubWaveKey] = useState(0);
+  // Ion's hub-screen dialogue — was local to Hub, lifted up here since the
+  // "Reaction Chamber" pick can now come from either the 2D menu (Hub) or
+  // the 3D rotating model (HubScene's onSelectChamber), and both need to
+  // drive the same speech-bubble/status-bar text.
+  const [hubMessage, setHubMessage] = useState("Hi, I'm Ion. Where should we start?");
+  const [hubLabel, setHubLabel] = useState('Choose where to start');
   const [chatOpen, setChatOpen] = useState(false);
   const chamber = useChamberController();
   const elements = useElementsController();
@@ -960,23 +1201,49 @@ function App() {
     setHubWaveKey((k) => k + 1);
     setView(v);
   }
+  function pickHubItem(item: HubItem): void {
+    setHubMessage(item.line);
+    setHubLabel(item.label);
+    goTo(item.key);
+  }
 
   const elementsChatContext: ChatContext = { kind: 'elements', symbol: elements.symbol };
+  // The molecule detail view's own "Ask Ion" grounds the chat in whichever
+  // tab is currently open — the molecule itself (Molecule and Bonds tabs
+  // both ground in the same molecule context, since the Bonds tab is still
+  // fundamentally about this molecule's own chemistry), or the element
+  // currently being inspected — same ChatContext shapes the rest of the app
+  // already uses, just sourced from the chamber's detail state instead of a
+  // screen.
+  const detailChatContext: ChatContext | null = chamber.detail
+    ? (chamber.detail.tab === 'molecule' || chamber.detail.tab === 'bond'
+      ? { kind: 'molecule', formula: chamber.detail.focus.formula }
+      : { kind: 'elements', symbol: chamber.detail.tab as ElementSymbol })
+    : null;
 
   return (
     <div id="app">
       <AppCanvas className="scene-layer">
-        {view === 'home' && <HubScene ionWaveKey={hubWaveKey} />}
+        {view === 'home' && (
+          <HubScene
+            ionWaveKey={hubWaveKey}
+            onSelectChamber={() => pickHubItem(HUB_LEFT[0])}
+            onSelectElements={() => pickHubItem(HUB_LEFT[1])}
+          />
+        )}
         {view === 'chamber' && <ChamberSceneContent c={chamber} />}
-        {view === 'elements' && <ElementsSceneContent e={elements} onIonClick={() => setChatOpen(true)} />}
+        {view === 'elements' && <ElementsSceneContent e={elements} />}
       </AppCanvas>
 
-      {view === 'home' && <Hub onNavigate={goTo} waveKey={hubWaveKey} />}
-      {view === 'chamber' && <ChamberOverlay c={chamber} onBack={goHome} />}
-      {view === 'elements' && <ElementsOverlay e={elements} onBack={goHome} />}
+      {view === 'home' && <Hub message={hubMessage} label={hubLabel} waveKey={hubWaveKey} />}
+      {view === 'chamber' && <ChamberOverlay c={chamber} onBack={goHome} onOpenChat={() => setChatOpen(true)} />}
+      {view === 'elements' && <ElementsOverlay e={elements} onBack={goHome} onOpenChat={() => setChatOpen(true)} />}
 
       {view === 'elements' && (
         <IonChatPanel open={chatOpen} onClose={() => setChatOpen(false)} context={elementsChatContext} />
+      )}
+      {view === 'chamber' && detailChatContext && (
+        <IonChatPanel open={chatOpen} onClose={() => setChatOpen(false)} context={detailChatContext} />
       )}
     </div>
   );

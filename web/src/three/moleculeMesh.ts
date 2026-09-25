@@ -97,6 +97,12 @@ export function buildMoleculeMesh(formula: string): THREE.Group {
   def.atoms.forEach((atom) => {
     const mesh = new THREE.Mesh(getSphereGeo(atom.el), getSphereMat(atom.el));
     mesh.position.set(atom.pos[0], atom.pos[1], atom.pos[2]);
+    // Lets a raycast hit on this sphere (MoleculeViewer's tap-to-inspect)
+    // know which element it belongs to — bond meshes already carry this
+    // kind of tag (bondType/elementA/elementB/order below); atom spheres
+    // didn't need it until the standalone molecule detail viewer needed to
+    // tell "clicked the oxygen" from "clicked a hydrogen" apart.
+    mesh.userData.el = atom.el;
     group.add(mesh);
   });
   def.bonds.forEach(([i, j, type, count]) => {

@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { Pool } from 'pg';
 import { balanceEquation } from './balance';
 import { canonicalFormula, compositionsMatch, parseFormula } from './formula';
+import { proposeIonAnswer, type IonAnswerContext } from './proposeIonAnswer';
 import { layoutMolecule } from './moleculeLayout';
 import { proposeMolecule } from './proposeMolecule';
 import { proposeReaction, REACTION_TYPES } from './proposeReaction';
@@ -211,6 +212,28 @@ app.post('/reactions/from-formulas', async (c) => {
     status: 'generated',
     reaction: { a, b, products: row.products, type: row.reaction_type, ...row.descriptor },
   });
+});
+
+interface IonAskBody {
+  question?: string;
+  context?: IonAnswerContext;
+}
+
+app.post('/ion/ask', async (c) => {
+  const body = await c.req.json<IonAskBody>().catch(() => null);
+  const question = typeof body?.question === 'string' ? body.question.trim() : '';
+  if (!question) {
+    return c.json({ status: 'error', message: 'question is required' }, 400);
+  }
+  const context: IonAnswerContext = body?.context ?? { kind: 'none' };
+
+  try {
+    const answer = await proposeIonAnswer(question, context);
+    return c.json({ status: 'ok', answer });
+  } catch (err) {
+    console.error('[ion/ask] AI call failed', err);
+    return c.json({ status: 'error', message: 'Ion could not come up with an answer just now' }, 502);
+  }
 });
 
 export default app;

@@ -23,7 +23,11 @@ const PINCH_SENSITIVITY = 0.006; // world units per pixel of pinch-distance chan
  * drives — so this is the control scheme a real Quest headset replaces
  * outright, not one it needs to be adapted for.
  */
-export function attachLookControls(canvasEl: HTMLElement, state: LookState): () => void {
+export function attachLookControls(
+  canvasEl: HTMLElement,
+  state: LookState,
+  onTap?: (clientX: number, clientY: number) => void,
+): () => void {
   // touch-action stays 'none' here deliberately, even with native pinch-zoom
   // now handled in-app: letting the browser's own page-zoom fire at the same
   // time would scale the whole page (bottom dock included) rather than just
@@ -41,6 +45,12 @@ export function attachLookControls(canvasEl: HTMLElement, state: LookState): () 
   let pinchStartDist = 0;
   let pinchStartZoom = 0;
 
+  // Same tap-vs-drag distinction attachOrbitControls already uses for
+  // BohrAtomModel's particle clicks — a "tap" is a single pointer that
+  // never moved more than a few pixels before release, so clicking a
+  // molecule doesn't fire on every drag-to-look gesture too.
+  let tapCandidate: { id: number; x: number; y: number; moved: boolean } | null = null;
+
   function pinchDistance(): number {
     const pts = Array.from(activePointers.values());
     return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -51,6 +61,7 @@ export function attachLookControls(canvasEl: HTMLElement, state: LookState): () 
     canvasEl.setPointerCapture(e.pointerId);
     if (activePointers.size === 2) {
       dragging = false; // a second touch landing mid-drag hands off to the pinch below
+      tapCandidate = null;
       pinchStartDist = pinchDistance();
       pinchStartZoom = state.zoomOffset;
     } else if (activePointers.size === 1) {
@@ -58,10 +69,14 @@ export function attachLookControls(canvasEl: HTMLElement, state: LookState): () 
       lastX = e.clientX;
       lastY = e.clientY;
       canvasEl.style.cursor = 'grabbing';
+      tapCandidate = onTap ? { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false } : null;
     }
   }
   function onPointerMove(e: PointerEvent): void {
     if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (tapCandidate && tapCandidate.id === e.pointerId) {
+      if (Math.hypot(e.clientX - tapCandidate.x, e.clientY - tapCandidate.y) > 6) tapCandidate.moved = true;
+    }
 
     if (activePointers.size === 2) {
       const delta = (pinchDistance() - pinchStartDist) * PINCH_SENSITIVITY;
@@ -91,16 +106,28 @@ export function attachLookControls(canvasEl: HTMLElement, state: LookState): () 
       canvasEl.style.cursor = 'grab';
     }
   }
+  function onPointerUp(e: PointerEvent): void {
+    const isTap = !!onTap && !!tapCandidate && tapCandidate.id === e.pointerId && !tapCandidate.moved && activePointers.size === 1;
+    const tapX = tapCandidate ? tapCandidate.x : e.clientX;
+    const tapY = tapCandidate ? tapCandidate.y : e.clientY;
+    release(e);
+    tapCandidate = null;
+    if (isTap) onTap!(tapX, tapY);
+  }
+  function onPointerCancel(e: PointerEvent): void {
+    release(e);
+    tapCandidate = null;
+  }
 
   canvasEl.addEventListener('pointerdown', onPointerDown);
   canvasEl.addEventListener('pointermove', onPointerMove);
-  canvasEl.addEventListener('pointerup', release);
-  canvasEl.addEventListener('pointercancel', release);
+  canvasEl.addEventListener('pointerup', onPointerUp);
+  canvasEl.addEventListener('pointercancel', onPointerCancel);
 
   return () => {
     canvasEl.removeEventListener('pointerdown', onPointerDown);
     canvasEl.removeEventListener('pointermove', onPointerMove);
-    canvasEl.removeEventListener('pointerup', release);
-    canvasEl.removeEventListener('pointercancel', release);
+    canvasEl.removeEventListener('pointerup', onPointerUp);
+    canvasEl.removeEventListener('pointercancel', onPointerCancel);
   };
 }

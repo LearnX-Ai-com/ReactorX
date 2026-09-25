@@ -51,6 +51,17 @@ export function toSubscript(formula: string): string {
   return formula.replace(/[0-9]/g, (d) => SUB[d]);
 }
 
+const SUP: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+/** "O" + charge -1 -> "O⁻", "Fe" + charge 2 -> "Fe²⁺" — standard ion
+ * notation, shared by the Ionize view's HUD label and its in-scene label
+ * (three/BohrAtom.tsx) so the two can never drift out of sync. */
+export function formatIonLabel(symbol: string, charge: number): string {
+  if (charge === 0) return symbol;
+  const magnitude = Math.abs(charge);
+  const digits = magnitude > 1 ? String(magnitude).split('').map((d) => SUP[d]).join('') : '';
+  return `${symbol}${digits}${charge > 0 ? '⁺' : '⁻'}`;
+}
+
 export function molarMass(formula: string): number {
   const counts = parseFormula(formula);
   return Object.entries(counts).reduce(

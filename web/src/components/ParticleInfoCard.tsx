@@ -1,5 +1,6 @@
-import { formatOxidation } from '../chemistry/bonds';
+import { formatOxidation, ionChargeRange } from '../chemistry/bonds';
 import { ATOMIC_NAMES, ELEMENTS } from '../chemistry/elements';
+import { formatIonLabel } from '../chemistry/formulas';
 import type { ElementSymbol } from '../chemistry/types';
 import type { BohrSceneState } from '../three/BohrAtom';
 
@@ -12,7 +13,7 @@ interface Explanation {
   formulaNote?: string;
 }
 
-function explain(symbol: ElementSymbol, state: BohrSceneState): Explanation {
+function explain(symbol: ElementSymbol, state: BohrSceneState, charge: number): Explanation {
   const el = ELEMENTS[symbol];
   const name = ATOMIC_NAMES[symbol];
 
@@ -23,6 +24,22 @@ function explain(symbol: ElementSymbol, state: BohrSceneState): Explanation {
       body: isProton
         ? '2 up quarks + 1 down quark (charges +⅔, +⅔, −⅓ = +1 overall). Gluons carry the strong force holding them together.'
         : '1 up quark + 2 down quarks (charges +⅔, −⅓, −⅓ = 0 overall). The same strong force holds these together too.',
+    };
+  }
+
+  // Ionize mode, nothing selected: the charge readout replaces the plain
+  // "here's the atom" blurb once it's actually been ionized, so the panel
+  // keeps up with what dragging an electron off actually did instead of
+  // sitting on generic text the whole time.
+  if ((state.mode === 'atom' || !state.type) && charge !== 0) {
+    const magnitude = Math.abs(charge);
+    const ion = formatIonLabel(symbol, charge);
+    const lost = charge > 0;
+    return {
+      title: `${name} → ${ion}`,
+      body: lost
+        ? `${name} has lost ${magnitude} electron${magnitude === 1 ? '' : 's'} — ${el.number} protons but only ${el.number - magnitude} electrons now, so it's a ${ion} cation: positively charged.`
+        : `${name} has gained ${magnitude} electron${magnitude === 1 ? '' : 's'} — ${el.number} protons but ${el.number + magnitude} electrons now, so it's a ${ion} anion: negatively charged.`,
     };
   }
 
@@ -93,6 +110,16 @@ export interface ParticleInfoCardProps {
   onExitQuark: () => void;
   onTriggerJump: () => void;
   jumpDisabled?: boolean;
+  /** Net ionize-mode charge (0 outside that mode or before anything's been
+   * dragged off) — see the dedicated `explain` branch above. */
+  charge?: number;
+  /** True in Ionize mode — this card already sits right next to the atom
+   * (see .particle-card's positioning), which is exactly where the ion
+   * guidance/controls belong: the same content living only in the bottom
+   * dock was easy to miss while attention is on the drag itself. */
+  isIonize?: boolean;
+  onAddElectron?: () => void;
+  onResetIons?: () => void;
 }
 
 /** The contextual explanation card in Inspect mode — changes with whatever
@@ -103,10 +130,17 @@ export interface ParticleInfoCardProps {
  * data, so it's safe to state outright rather than needing to be sourced
  * per element. Also the only place the atom's quark drill-down (already
  * built into BohrAtomHandle) is actually reachable. */
-export function ParticleInfoCard({ symbol, state, onEnterQuark, onExitQuark, onTriggerJump, jumpDisabled }: ParticleInfoCardProps) {
-  const { title, body, formula, formulaNote } = explain(symbol, state);
+export function ParticleInfoCard({
+  symbol, state, onEnterQuark, onExitQuark, onTriggerJump, jumpDisabled, charge = 0,
+  isIonize, onAddElectron, onResetIons,
+}: ParticleInfoCardProps) {
+  const { title, body, formula, formulaNote } = explain(symbol, state, charge);
   const canZoomQuarks = state.mode === 'particle' && (state.type === 'proton' || state.type === 'neutron') && !state.isGhost;
   const canJump = state.mode === 'particle' && state.type === 'electron' && ELEMENTS[symbol].shells.length > 1;
+  const name = ATOMIC_NAMES[symbol];
+  const range = isIonize ? ionChargeRange(symbol) : null;
+  const canLose = !!range && charge + 1 <= range.max;
+  const canGain = !!range && charge - 1 >= range.min;
 
   return (
     <div className="particle-card">
@@ -130,6 +164,27 @@ export function ParticleInfoCard({ symbol, state, onEnterQuark, onExitQuark, onT
       )}
       {state.mode === 'quark' && (
         <button type="button" className="chip" onClick={onExitQuark}>{'←'} Back to atom</button>
+      )}
+      {isIonize && range && (
+        <div className="particle-card-ionize">
+          <p className="particle-card-body">
+            {canLose && canGain
+              ? <>Drag an electron away to lose it, or add one below — {name} can realistically form either kind of ion.</>
+              : canLose
+                ? <>Drag an electron away from the nucleus and let go to ionize it — {name} only realistically loses electrons, never gains them.</>
+                : canGain
+                  ? <>{name} only realistically gains electrons, never loses them — use the button below.</>
+                  : <>{name} has no well-established ion form — dragging won&apos;t do much here.</>}
+          </p>
+          <div className="particle-card-ionize-actions">
+            {canGain && (
+              <button type="button" className="chip chip-accent" onClick={onAddElectron}>{'+'} electron</button>
+            )}
+            {charge !== 0 && (
+              <button type="button" className="chip" onClick={onResetIons}>{'↺'} Reset</button>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

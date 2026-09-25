@@ -317,6 +317,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 }
 .particle-card .chip { pointer-events: auto; margin: 8px 4px 0 0; }
 
+.particle-card-ionize {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(45, 212, 191, 0.25);
+}
+.particle-card-ionize-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+
 @media (max-width: 720px) {
   .particle-card { top: auto; bottom: 96px; right: 12px; left: 12px; width: auto; transform: none; }
 }
@@ -346,6 +353,39 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   font-size: 13.5px;
   color: var(--text);
   line-height: 1.4;
+}
+
+/* ---------------- inspect-mode entry toast (replaces the old static dock note) ---------------- */
+
+.inspect-toast {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(460px, 88vw);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--panel-translucent);
+  border: 1px solid rgba(45, 212, 191, 0.4);
+  border-radius: 12px;
+  padding: 10px 16px;
+  z-index: 2;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+  /* Fades out over its last 0.6s, timed to finish right as the 30s JS
+   * timer (ElementsOverlay) unmounts it — see that component's doc. */
+  animation: bubble-in 0.2s ease, toast-fade-out 0.6s ease 29.4s forwards;
+}
+.inspect-toast p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text);
+  line-height: 1.4;
+}
+@keyframes toast-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 /* ---------------- home hub overlay ---------------- */
@@ -378,91 +418,64 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   text-transform: none;
 }
 
-.nameplate {
+/* Bottom-center "Choose where to start" bar — was a small bottom-left
+ * nameplate; widened and re-centered to read as the hub's own status bar,
+ * matching the reference mockup's full-width pill along the bottom edge. */
+.hub-startbar {
   position: absolute;
-  left: 20px;
-  bottom: 20px;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: var(--panel-solid);
-  border: 1px solid var(--border-strong);
+  justify-content: center;
+  gap: 12px;
+  min-width: 320px;
+  max-width: min(480px, 88vw);
+  background: var(--panel-translucent);
+  border: 1px solid rgba(45, 212, 191, 0.35);
   border-radius: 999px;
-  padding: 8px 14px 8px 8px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 12px;
-  color: var(--text-dim);
+  padding: 14px 28px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 24px rgba(45, 212, 191, 0.1);
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 600;
+  font-size: 14.5px;
+  color: var(--text);
+  pointer-events: none;
 }
 .nameplate-dot {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, var(--accent-strong), #0e5f56);
   flex: none;
 }
 
-.menu {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  pointer-events: auto;
-}
-.menu.left { left: 20px; }
-.menu.right { right: 20px; align-items: flex-end; }
-
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-family: 'Inter', ui-sans-serif, sans-serif;
-  color: var(--text);
-}
-.menu.right .menu-item { flex-direction: row-reverse; }
-
-.menu-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  background: var(--panel-solid);
-  border: 1px solid var(--border-strong);
-  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-.menu-item:hover .menu-icon {
-  transform: scale(1.08);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.14), 0 0 18px rgba(45, 212, 191, 0.35);
-}
-.menu-item:active .menu-icon { transform: scale(0.98); }
-.menu-item.soon .menu-icon { opacity: 0.4; }
-.menu-item.soon { cursor: default; }
-
-.menu-label {
-  font-size: 12.5px;
-  font-weight: 600;
+/* Floating label under a clickable 3D hub object (the rotating
+ * lab-equipment / explore models — "Reaction Chamber" and "Explore
+ * Elements") — both hub nav entries are 3D objects now, no 2D menu cards
+ * left, so this is the only nav label style the hub overlay still needs. */
+.hub-3d-label {
   white-space: nowrap;
-  background: var(--panel-solid);
-  border: 1px solid var(--border);
-  padding: 5px 10px;
-  border-radius: 8px;
-  opacity: 0;
-  transform: translateX(-6px);
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  background: var(--panel-translucent);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  border-radius: 999px;
+  padding: 8px 16px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 18px rgba(45, 212, 191, 0.18);
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  pointer-events: none;
 }
-.menu.right .menu-label { transform: translateX(6px); }
-.menu-item:hover .menu-label { opacity: 1; transform: translateX(0); }
-.menu-item.soon .menu-label { color: var(--text-faint); }
+/* Matches the amber point light HubScene puts on the "Explore Elements"
+ * model, so the label glows the same color as the object it's under. */
+.hub-3d-label-amber {
+  border-color: rgba(245, 165, 36, 0.4);
+  box-shadow: 0 0 18px rgba(245, 165, 36, 0.2);
+}
 
 .hub-bubble {
   position: absolute;
@@ -473,10 +486,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  background: var(--panel-solid);
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
-  padding: 12px 16px;
+  background: var(--panel-translucent);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  border-radius: 999px;
+  padding: 12px 20px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 20px rgba(45, 212, 191, 0.1);
   animation: bubble-in 0.25s ease;
 }
 .hub-bubble p { margin: 0; font-size: 14.5px; line-height: 1.45; }
@@ -485,11 +500,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   to { opacity: 1; transform: translateX(-50%) scale(1); }
 }
 
-@media (max-width: 640px) {
-  .menu { gap: 10px; }
-  .menu-icon { width: 44px; height: 44px; font-size: 19px; }
-  .menu-label { display: none; }
+@media (max-width: 720px) {
   .hub-eyebrow b { font-size: 15px; }
+  .hub-startbar { min-width: 0; padding: 10px 18px; font-size: 13px; bottom: 16px; }
 }
 
 /* ---------------- shared controls ---------------- */
@@ -860,6 +873,15 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   border: 1px solid var(--border-strong);
   align-self: flex-end;
 }
+.chat-thinking { color: var(--text-dim); font-style: italic; }
+.chat-fallback-tag {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--amber);
+  margin-bottom: 3px;
+}
 .chat-input-row {
   display: flex;
   gap: 8px;
@@ -877,6 +899,28 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
   font-size: 13px;
 }
 .chat-input-row input::placeholder { color: var(--text-faint); }
+
+/* ---------------- elements room: floating status panel above the table, via drei <Html> ---------------- */
+
+.table-status-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--panel-translucent);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.06) inset, 0 12px 28px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+.table-status-name {
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+.table-status-panel .chip { flex: none; }
 
 /* ---------------- chamber right wall: reaction details + Ion chat, floating via drei <Html> ---------------- */
 
@@ -954,6 +998,174 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
 }
 .ion-panel .chat-log { padding: 10px 0; gap: 8px; }
 .ion-panel .chat-input-row { padding: 8px 0 0; border-top: none; }
+
+/* ---------------- chamber: molecule/bond detail card (click a molecule), via drei <Html> ---------------- */
+
+.molecule-card {
+  width: 300px;
+  max-width: 84vw;
+  text-align: left;
+  background: var(--panel-translucent);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 16px 18px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.06) inset, 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+.molecule-card-close {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-family: 'Inter', ui-sans-serif, sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.molecule-card-formula {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  color: var(--accent-strong);
+  text-shadow: 0 0 10px rgba(94, 234, 212, 0.4);
+}
+.molecule-card-name {
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+  margin-top: 2px;
+  margin-bottom: 10px;
+}
+.molecule-card-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.molecule-card-chips .chip { padding: 4px 10px; font-size: 11.5px; cursor: default; }
+.molecule-card-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  margin: 8px 0;
+  background: rgba(45, 212, 191, 0.06);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.molecule-card-stat strong { color: var(--accent-strong); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.molecule-card-fact {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.molecule-card-hint {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.molecule-card-inspect-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.molecule-card-inspect {
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.4);
+  color: var(--accent-strong);
+}
+.molecule-card-replay {
+  margin-top: 10px;
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.4);
+  color: var(--accent-strong);
+}
+
+/* ---------------- chamber: full-screen molecule detail view ---------------- */
+/* Tapping a reactant/product (or one of its bonds) in the chamber opens
+ * this — a plain 2D overlay over its own dedicated 3D scene (see
+ * ChamberSceneContent's c.detail branch), not another 3D-anchored panel
+ * like the rest of the chamber's chrome, matching the original prototype's
+ * own full-screen detail view. */
+
+.detail-header {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  z-index: 2;
+}
+.detail-header .icon-btn { position: static; flex: none; }
+.detail-header-label {
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+.detail-header-formula {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.detail-tabs {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 2;
+}
+
+.molecule-detail-card {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  z-index: 2;
+}
+
+.ask-ion-btn {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(45, 212, 191, 0.12);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 12px 22px;
+  color: var(--accent-strong);
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.ask-ion-btn:hover { background: rgba(45, 212, 191, 0.2); }
+/* Inspect mode's own particle-card (.particle-card, right side, vertically
+ * centered) can grow tall enough to reach the bottom-right corner the
+ * button normally sits in, covering it — pin it above the card instead,
+ * mirroring the back button's top-left placement, rather than trying to
+ * predict the card's height for every view mode/ionize state. */
+.ask-ion-btn-top { bottom: auto; top: 24px; }
+
+@media (max-width: 720px) {
+  .detail-tabs { top: auto; bottom: 96px; left: 50%; }
+  .molecule-detail-card { bottom: 148px; left: 12px; right: 12px; width: auto; }
+  .ask-ion-btn { bottom: 96px; }
+  .ask-ion-btn-top { top: 16px; bottom: auto; }
+}
 
 /* ---------------- chamber center wall: floating sky text ---------------- */
 

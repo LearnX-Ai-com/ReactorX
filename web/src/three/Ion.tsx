@@ -1,4 +1,4 @@
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 
@@ -17,6 +17,15 @@ export interface IonProps {
   waveKey?: number;
   /** When set, Ion is clickable (cursor + hover pulse) — used to open the chat panel. */
   onClick?: () => void;
+  /** When set, ignores position/smallPosition/variant entirely and instead
+   * anchors to a fixed offset from the CAMERA every frame (camera-local:
+   * +X right, +Y up, -Z forward) — a HUD element with constant apparent
+   * size/position on screen no matter how far the scene's own camera has
+   * zoomed. Inspect mode's orbit camera zooms dramatically as a student
+   * examines an atom; a world-anchored Ion would otherwise grow and shrink
+   * right along with it, which is the bug this exists to fix. */
+  hudOffset?: [number, number, number];
+  hudScale?: number;
 }
 
 const FULL_SCALE = 1;
@@ -29,7 +38,8 @@ const TWEEN_RATE = 4; // higher = snappier size/position transitions
  * an orbiting electron on a shell ring) rather than an imported model, so
  * it reads as "made of the subject matter" the way the app's own atoms do.
  */
-export function Ion({ variant, position, smallPosition, waveKey, onClick }: IonProps) {
+export function Ion({ variant, position, smallPosition, waveKey, onClick, hudOffset, hudScale }: IonProps) {
+  const { camera } = useThree();
   const groupRef = useRef<THREE.Group>(null!);
   const [hovered, setHovered] = useState(false);
   const leftArmRef = useRef<THREE.Group>(null!);
@@ -68,14 +78,28 @@ export function Ion({ variant, position, smallPosition, waveKey, onClick }: IonP
     const g = groupRef.current;
     if (!g) return;
 
-    const lerpFactor = Math.min(1, dt * TWEEN_RATE);
-    currentScaleRef.current += (targetScale - currentScaleRef.current) * lerpFactor;
-    currentPosRef.current.lerp(targetPos, lerpFactor);
     const hoverBump = onClick && hovered ? 1.1 : 1;
-    g.scale.setScalar(currentScaleRef.current * hoverBump);
-    g.position.copy(currentPosRef.current);
-    g.position.y += Math.sin(t * 1.1) * 0.06;
-    g.rotation.y = Math.sin(t * 0.35) * 0.18;
+    const bob = Math.sin(t * 1.1) * 0.06;
+    if (hudOffset) {
+      // Locked to the camera's current frame, not lerped — the atom's own
+      // camera can already be moving/zooming, and easing Ion's HUD position
+      // on top of that would read as it lagging behind rather than staying
+      // put on screen.
+      camera.updateMatrixWorld();
+      const worldPos = camera.localToWorld(new THREE.Vector3(hudOffset[0], hudOffset[1] + bob, hudOffset[2]));
+      g.position.copy(worldPos);
+      g.quaternion.copy(camera.quaternion);
+      g.rotateY(Math.sin(t * 0.35) * 0.18);
+      g.scale.setScalar((hudScale ?? SMALL_SCALE) * hoverBump);
+    } else {
+      const lerpFactor = Math.min(1, dt * TWEEN_RATE);
+      currentScaleRef.current += (targetScale - currentScaleRef.current) * lerpFactor;
+      currentPosRef.current.lerp(targetPos, lerpFactor);
+      g.scale.setScalar(currentScaleRef.current * hoverBump);
+      g.position.copy(currentPosRef.current);
+      g.position.y += bob;
+      g.rotation.y = Math.sin(t * 0.35) * 0.18;
+    }
 
     if (now - lastBlinkRef.current > 3500) {
       lastBlinkRef.current = now;

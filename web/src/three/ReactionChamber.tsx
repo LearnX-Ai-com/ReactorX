@@ -35,6 +35,11 @@ export interface ReactionChamberHandle {
    * resetChamber alone would leave up until the coeffs-changed effect
    * happened to re-fire. */
   play(): void;
+  /** The current reactant/product molecule groups — every mesh under them
+   * (built by buildMoleculeMesh) carries userData.formula/bondType, so the
+   * room's own tap handler can raycast against just these rather than the
+   * whole scene, then walk up to find which molecule (or bond) was hit. */
+  getClickableGroups(): THREE.Object3D[];
 }
 
 interface ReactionChamberModelProps {
@@ -332,11 +337,15 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       react();
     }
 
+    function getClickableGroups(): THREE.Object3D[] {
+      return [reactantGroupARef.current, reactantGroupBRef.current, ...productGroupsRef.current];
+    }
+
     // react/reset/play are plain closures over stable refs, recreated every
     // render — deliberately not memoized (they're cheap and the handle only
     // needs to expose the latest ones).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    useImperativeHandle(ref, () => ({ react, reset, play }), [reactantA, reactantB, coeffs, onStateChange]);
+    useImperativeHandle(ref, () => ({ react, reset, play, getClickableGroups }), [reactantA, reactantB, coeffs, onStateChange]);
 
     // One-time scaffold: lights, groups, signage, backdrop, camera controls.
     // driveCamera=false (parked on a ChamberRoom wall) skips everything that

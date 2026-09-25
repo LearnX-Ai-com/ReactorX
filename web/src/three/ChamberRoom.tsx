@@ -4,11 +4,12 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { ELEMENTS } from '../chemistry/elements';
 import { matchesFilter, type CategoryFilter } from '../chemistry/elementFilter';
-import type { Reaction, ReactantSlot, TrayCard } from '../chemistry/types';
+import type { BondType, ElementSymbol, Reaction, ReactantSlot, TrayCard } from '../chemistry/types';
 import { ChamberFilterPanel } from './ChamberFilterPanel';
 import { ChamberIonPanel } from './ChamberIonPanel';
 import { ChamberReactionCard } from './ChamberReactionCard';
 import { Ion } from './Ion';
+import type { MoleculeFocus } from './MoleculeDetailCard';
 import { attachLookControls, type LookState } from './lookControls';
 import { computeSideWallTransform, LAB, yawBetween, yawToFace } from './labGeometry';
 import { ease } from './math';
@@ -154,6 +155,14 @@ export interface ChamberRoomProps {
    * the normal standing position only when this goes false (expanding the
    * panel back out, not just switching which wall is focused). */
   zoomed: boolean;
+
+  /** Tapping a reactant/product molecule (or a bond on one) opens the
+   * full-screen molecule detail view (App.tsx's MoleculeDetailOverlay/
+   * MoleculeDetailScene) at this focus — mirrors the original prototype's
+   * handleCanvasTap -> openDetailView flow, just scoped to this room's own
+   * clickable groups (see ReactionChamberModel's getClickableGroups) rather
+   * than raycasting the whole scene. */
+  onOpenDetail: (focus: MoleculeFocus) => void;
 }
 
 /**
@@ -172,7 +181,7 @@ export function ChamberRoom({
   chamberRef, reactantA, reactantB, coeffs, onChamberStateChange, reaction, caption, phase,
   activeBuildSlot, trayCards, onAddCard,
   elementCategory, onElementCategoryChange,
-  ionWaveKey, focusWall, focusKey, zoomed,
+  ionWaveKey, focusWall, focusKey, zoomed, onOpenDetail,
 }: ChamberRoomProps) {
   const { scene, camera, gl } = useThree();
   const lookRef = useRef<LookState>({ yaw: 0, pitch: 0, zoomOffset: 0 });
@@ -209,14 +218,54 @@ export function ChamberRoom({
     (grid.material as THREE.Material & { transparent: boolean }).transparent = true;
     root.add(grid);
 
-    const detach = attachLookControls(gl.domElement, lookRef.current);
+    // Tap (not drag) on a reactant/product molecule opens the full-screen
+    // molecule detail view; a bond on that molecule wins over the molecule
+    // itself when both are hit, same priority BohrAtomModel's own tap
+    // handler uses for its particles vs. their ring hit-targets. Scoped to
+    // just the chamber's own groups (not the whole scene) via the handle's
+    // getClickableGroups — cheap, and can't accidentally match unrelated
+    // userData elsewhere in the room.
+    function handleMoleculeTap(clientX: number, clientY: number): void {
+      const groups = chamberRef.current?.getClickableGroups();
+      if (!groups?.length) return;
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(groups, true);
+      if (!hits.length) return;
+      const bondHit = hits.find((h) => h.object.userData?.bondType);
+      const primary = bondHit ?? hits[0];
+      let obj: THREE.Object3D | null = primary.object;
+      while (obj && !obj.userData?.formula) obj = obj.parent;
+      if (!obj) return;
+      const formula = obj.userData.formula as string;
+      if (bondHit) {
+        onOpenDetail({
+          kind: 'bond',
+          formula,
+          bondType: bondHit.object.userData.bondType as BondType,
+          elementA: bondHit.object.userData.elementA as ElementSymbol,
+          elementB: bondHit.object.userData.elementB as ElementSymbol,
+          order: (bondHit.object.userData.order as number) || 1,
+        });
+      } else {
+        onOpenDetail({ kind: 'molecule', formula });
+      }
+    }
+
+    const detach = attachLookControls(gl.domElement, lookRef.current, handleMoleculeTap);
 
     return () => {
       detach();
       scene.remove(root);
       grid.geometry.dispose();
     };
-    // gl/scene/camera are stable for the lifetime of a given <Canvas>.
+    // gl/scene/camera are stable for the lifetime of a given <Canvas>;
+    // chamberRef is a stable ref object, not meant to be reactive.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

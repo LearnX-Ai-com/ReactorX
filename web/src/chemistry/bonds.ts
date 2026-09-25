@@ -1,6 +1,6 @@
-import { ELEMENTS } from './elements';
+import { ATOMIC_NAMES, ELEMENTS } from './elements';
 import { getKnownMolecule } from './moleculeSource';
-import type { ElementSymbol } from './types';
+import type { BondType, ElementSymbol } from './types';
 
 export const BOND_SYMBOL: Record<number, string> = { 1: '–', 2: '=', 3: '≡' };
 
@@ -50,6 +50,22 @@ export function formatOxidation(n: number): string {
   return n === 0 ? '0' : (n > 0 ? '+' : '−') + Math.abs(n);
 }
 
+/** The realistic charge range an element can actually reach — derived from
+ * its own real common oxidation states (ELEMENTS[symbol].oxidation), not a
+ * hand-picked rule. Oxygen's oxidation states are all negative ([-2, -1]),
+ * so max comes out 0 — no cation, matching real chemistry (it always gains
+ * electrons, never loses them). Iron's are all positive ([2, 3]), so min
+ * comes out 0 — no anion. Shared by the Ionize view's drag gate and its
+ * "+ electron" button (three/BohrAtom.tsx) and the dock's button
+ * enablement (App.tsx), so the three can't drift out of sync. */
+export function ionChargeRange(symbol: ElementSymbol): { min: number; max: number } {
+  const states = ELEMENTS[symbol].oxidation;
+  return {
+    min: Math.min(0, ...states),
+    max: Math.max(0, ...states),
+  };
+}
+
 // One entry per distinct element in the molecule (all atoms of an element
 // share a state in every molecule in this data set).
 export function oxidationBySymbol(formula: string): Partial<Record<ElementSymbol, number>> {
@@ -70,4 +86,46 @@ export function bondTypeLabel(formula: string): string {
   if (bonds.length === 0) return 'Single atom';
   if (bonds.some((b) => b[2] === 'ionic')) return 'Ionic bonding';
   return 'Covalent bonding';
+}
+
+export interface BondExplanation {
+  title: string;
+  kind: string;
+  diff: string;
+  body: string;
+}
+
+// A couple of bonds get a hand-written explanation instead of the generic
+// template — ported from the original single-file prototype (index.html,
+// bondInfo()) essentially verbatim, since these two are exactly the
+// textbook examples (a clean ionic transfer, a clean polar-covalent
+// share) worth naming explicitly rather than leaving to the templated
+// wording. Keyed by the pair's symbols sorted, so order doesn't matter.
+const BESPOKE_BOND_EXPLANATIONS: Record<string, (diff: string) => string> = {
+  'Cl-Na': (diff) => `Sodium (EN ${ELEMENTS.Na.en}) barely holds onto its lone valence electron; chlorine (EN ${ELEMENTS.Cl.en}) pulls hard for one more to fill its own shell. That gap (${diff}) is wide enough that sodium simply gives its electron away rather than sharing it — forming Na⁺ and Cl⁻ ions held together by electrostatic attraction, not a shared pair.`,
+  'H-O': (diff) => `Oxygen (EN ${ELEMENTS.O.en}) pulls harder on the shared electron pair than hydrogen (EN ${ELEMENTS.H.en}) does. The gap (${diff}) isn't wide enough to transfer the electron outright, but it's enough to make this bond polar — electrons spend more time near oxygen, giving it a slight negative charge and hydrogen a slight positive one.`,
+};
+
+/** Why a specific bond is ionic/covalent, in the same "electronegativity gap"
+ * terms the rest of the app already uses (oxidationStates above) — the
+ * click-a-bond explanation for the reaction chamber's molecule/bond card.
+ * Ported from the original single-file prototype's bondInfo(). */
+export function bondInfo(bondType: BondType, elA: ElementSymbol, elB: ElementSymbol, order?: number): BondExplanation {
+  const a = ELEMENTS[elA];
+  const b = ELEMENTS[elB];
+  const diff = (a.en != null && b.en != null ? Math.abs(a.en - b.en) : 0).toFixed(2);
+  const key = [elA, elB].slice().sort().join('-');
+  const n = order || 1;
+  const pairWord = n === 1 ? 'a single pair' : n === 2 ? 'two pairs' : 'three pairs';
+  const bondWord = n === 1 ? 'a single bond' : n === 2 ? 'a double bond' : 'a triple bond';
+  const electronWord = n === 1 ? 'an electron' : n === 2 ? 'two electrons' : `${n} electrons`;
+  const generic = bondType === 'ionic'
+    ? `The electronegativity difference between ${ATOMIC_NAMES[elA]} (${a.en}) and ${ATOMIC_NAMES[elB]} (${b.en}) is ${diff} — large enough that one atom transfers ${electronWord} to the other rather than sharing them, forming oppositely charged ions held together by electrostatic attraction.`
+    : `${ATOMIC_NAMES[elA]} (${a.en}) and ${ATOMIC_NAMES[elB]} (${b.en}) have an electronegativity difference of just ${diff} — small enough that both atoms share electrons instead of one taking them outright. Here they share ${pairWord} of electrons, forming ${bondWord}.`;
+  return {
+    title: `${elA}–${elB} bond`,
+    kind: bondType === 'ionic' ? 'Ionic bond' : (n === 1 ? 'Covalent bond' : n === 2 ? 'Covalent bond (double)' : 'Covalent bond (triple)'),
+    diff,
+    body: BESPOKE_BOND_EXPLANATIONS[key]?.(diff) ?? generic,
+  };
 }

@@ -1,12 +1,15 @@
-import { bondList, formatOxidation, oxidationBySymbol } from '../chemistry/bonds';
+import { bondList, bondTypeLabel, formatOxidation, oxidationBySymbol } from '../chemistry/bonds';
 import { ELEMENTS } from '../chemistry/elements';
-import { toSubscript } from '../chemistry/formulas';
+import { molarMass, toSubscript } from '../chemistry/formulas';
+import { MOLECULE_INFO } from '../chemistry/molecules';
+import { getMoleculeName } from '../chemistry/moleculeSource';
 import { formatReactionType, reactionArrow } from '../chemistry/reactions';
 import type { ElementSymbol, Reaction } from '../chemistry/types';
 
 export type ChatContext =
   | { kind: 'chamber'; reactantA: string; reactantB: string; reaction: Reaction | null }
   | { kind: 'elements'; symbol: ElementSymbol }
+  | { kind: 'molecule'; formula: string }
   | { kind: 'none' };
 
 /**
@@ -51,6 +54,30 @@ export function answerIonQuestion(question: string, ctx: ChatContext): string {
       return `${ctx.symbol} sits in period ${el.period}${el.group != null ? `, group ${el.group}` : ''}, in the ${el.block}-block of the table.`;
     }
     return `${ctx.symbol}, atomic number ${el.number}. Ask me about its electron configuration, oxidation states, mass, electronegativity, position on the table, or a fun fact.`;
+  }
+
+  if (ctx.kind === 'molecule') {
+    const { formula } = ctx;
+    const name = getMoleculeName(formula) ?? toSubscript(formula);
+    const info = MOLECULE_INFO[formula];
+    if (q.includes('bond')) {
+      const bonds = bondList(formula);
+      return bonds.length ? `${name}'s bonds: ${bonds.join(', ')}.` : `${name} is a single atom — no bonds to speak of.`;
+    }
+    if (q.includes('oxidat') || q.includes('charge')) {
+      const states = Object.entries(oxidationBySymbol(formula)).map(([el, n]) => `${el} is ${formatOxidation(n ?? 0)}`);
+      return states.length ? `In ${name}: ${states.join(', ')}.` : "I can't derive oxidation states without at least one polar or ionic bond here.";
+    }
+    if (q.includes('mass') || q.includes('molar') || q.includes('weight')) {
+      return `${name}'s molar mass is about ${molarMass(formula).toFixed(2)} g/mol.`;
+    }
+    if (q.includes('fact') || q.includes('interesting') || q.includes('fun') || q.includes('cool')) {
+      return info?.fact ?? `I don't have a fun fact on file for ${name} yet — ask me about its bonds, oxidation states, or molar mass instead.`;
+    }
+    if (q.includes('categor') || q.includes('type') || q.includes('ionic') || q.includes('covalent')) {
+      return `${name} is ${info?.category ? `classified as a ${info.category.toLowerCase()}` : 'a compound'}, held together by ${bondTypeLabel(formula).toLowerCase()}.`;
+    }
+    return `${name} (${toSubscript(formula)}). Ask me about its bonds, oxidation states, molar mass, or a fun fact — or tap one of its elements up top to zoom into that atom.`;
   }
 
   // kind === 'chamber'

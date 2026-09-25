@@ -6,3 +6,8 @@ dist/
 *.log
 .DS_Store
 .claude/settings.local.json
+
+# Raw GLB drop folder — the actual assets the app uses are the copies in
+# web/public/models/; keeping both tracked would double ~26MB of binary
+# data in the repo for no benefit.
+/glb/
