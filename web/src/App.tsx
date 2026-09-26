@@ -26,6 +26,7 @@ import { IonChatBody } from './ion/ChatBody';
 import type { ChatContext } from './ion/answers';
 import { speak } from './ion/speech';
 import { xrStore } from './three/xr';
+import { XRHud } from './three/XRHud';
 
 type View = 'home' | 'chamber' | 'elements';
 
@@ -1249,6 +1250,16 @@ function App() {
       ? { kind: 'molecule', formula: chamber.detail.focus.formula }
       : { kind: 'elements', symbol: chamber.detail.tab as ElementSymbol })
     : null;
+  // Same idea as elementsChatContext/detailChatContext above, just unified
+  // across every screen (including plain chamber browsing with no detail
+  // view open) for XRHud — the one place that needs "whatever's currently
+  // relevant" regardless of which view/mode is active, since it's always
+  // mounted (it just renders nothing outside an XR session).
+  const xrHudContext: ChatContext = view === 'elements'
+    ? elementsChatContext
+    : view === 'chamber'
+      ? (detailChatContext ?? { kind: 'chamber', reactantA: chamber.reactantA, reactantB: chamber.reactantB, reaction: chamber.reaction })
+      : { kind: 'none' };
 
   return (
     <div id="app">
@@ -1262,6 +1273,7 @@ function App() {
         )}
         {view === 'chamber' && <ChamberSceneContent c={chamber} />}
         {view === 'elements' && <ElementsSceneContent e={elements} />}
+        <XRHud context={xrHudContext} />
       </AppCanvas>
 
       <EnterVRButton />

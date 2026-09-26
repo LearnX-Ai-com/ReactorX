@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { toSubscript } from '../chemistry/formulas';
-import { answerIonQuestion, type ChatContext } from './answers';
+import { answerIonQuestion, greetingFor, type ChatContext } from './answers';
 import { askIon } from './api';
 
 interface ChatMessage {
@@ -11,17 +10,6 @@ interface ChatMessage {
    * call. Surfaced visibly rather than silently, so "the AI answers seem
    * generic" is actually noticeable instead of looking like a wiring bug. */
   fallback?: boolean;
-}
-
-function greetingFor(ctx: ChatContext): string {
-  if (ctx.kind === 'chamber') {
-    return ctx.reaction
-      ? `Ask me about ${toSubscript(ctx.reactantA)} + ${toSubscript(ctx.reactantB)} — bonds, energy change, conditions, catalyst, safety, lab steps, oxidation states, balancing, anything.`
-      : "I don't have a reaction loaded for this pair, but ask away — I'll tell you what I can.";
-  }
-  if (ctx.kind === 'elements') return `Ask me about ${ctx.symbol} — its electron configuration, oxidation states, mass, or category.`;
-  if (ctx.kind === 'molecule') return `Ask me about ${toSubscript(ctx.formula)} — its bonds, oxidation states, molar mass, or a fun fact.`;
-  return "Head into the chamber or the atom explorer and I'll have more to say.";
 }
 
 /** Identity string for "is this genuinely a different thing to talk about" —

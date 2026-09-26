@@ -12,6 +12,20 @@ export type ChatContext =
   | { kind: 'molecule'; formula: string }
   | { kind: 'none' };
 
+/** Ion's opening line for a context — IonChatBody's greeting each time the
+ * topic changes, and three/XRHud.tsx's only content (that panel has no
+ * live conversation, just this same context-aware blurb). */
+export function greetingFor(ctx: ChatContext): string {
+  if (ctx.kind === 'chamber') {
+    return ctx.reaction
+      ? `Ask me about ${toSubscript(ctx.reactantA)} + ${toSubscript(ctx.reactantB)} — bonds, energy change, conditions, catalyst, safety, lab steps, oxidation states, balancing, anything.`
+      : "I don't have a reaction loaded for this pair, but ask away — I'll tell you what I can.";
+  }
+  if (ctx.kind === 'elements') return `Ask me about ${ctx.symbol} — its electron configuration, oxidation states, mass, or category.`;
+  if (ctx.kind === 'molecule') return `Ask me about ${toSubscript(ctx.formula)} — its bonds, oxidation states, molar mass, or a fun fact.`;
+  return "Head into the chamber or the atom explorer and I'll have more to say.";
+}
+
 /**
  * Ion's answers are scripted keyword matching over the app's own chemistry
  * data — the same approach the original chamber's Ion used, and consistent
