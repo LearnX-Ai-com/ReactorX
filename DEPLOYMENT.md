@@ -1,89 +1,88 @@
-# Deploying ReactorX to Netlify
+# Deploying ReactorX
 
-ReactorX is a static site: one [index.html](index.html), no build step and no server code. Netlify only has to serve the files in this repo.
+ReactorX has two deployable pieces that both need to be live for the app to fully work:
 
-**Live site:** <https://reactor-x.netlify.app/>
+| Piece | What it is | Hosted on |
+| --- | --- | --- |
+| Frontend (`web/`) | The Vite + React + Three.js app | Netlify |
+| Backend (`functions/`) | A Hono API (AI chat, molecule/reaction lookups) + Postgres | Neon |
 
-## Netlify settings
+The frontend calls the backend over HTTP (`VITE_FUNCTIONS_URL`), so deploy the backend first, then point the frontend at its URL.
 
-| Setting | Value |
-| --- | --- |
-| Build command | *(leave empty)* |
-| Publish directory | `.` (the repo root) |
-| Functions directory | *(none)* |
-| Environment variables | *(none needed)* |
-| Node version | Not applicable, nothing is built |
+> The previous version of this doc described the original single-file `index.html` prototype as a static, no-build site. That app was rebuilt into the Vite app in `web/` with a real backend in `functions/` — this doc reflects the current architecture.
 
-## Option 1: Continuous deploy from GitHub (recommended)
+## Prerequisites
 
-Every push to `main` redeploys the site automatically.
+- A [Neon](https://neon.tech) account with access to this project (`DATABASE_URL` in the root `.env` points at it already).
+- A [Netlify](https://netlify.com) account.
+- Neon CLI: `npm install -g neon`, then `neon login` (opens a browser — do this yourself, not from an automated shell).
+- This repo's GitHub remote (`Ponnusa/ReactorX`) connected to both accounts.
 
-1. Sign in to [app.netlify.com](https://app.netlify.com).
-2. Choose **Add new site → Import an existing project → GitHub**.
-3. Authorize Netlify for the GitHub account that owns the repo (`Neha3-code`) and pick the **ReactorX** repository.
-4. Set the branch to deploy to `main`, leave **Build command** empty and set **Publish directory** to `.`.
-5. Click **Deploy**. The first deploy takes under a minute and gives you a `https://<site-name>.netlify.app` URL.
-6. Optional: under **Site configuration → Change site name** pick a friendlier subdomain.
+## Part 1: Deploy the backend to Neon
 
-After this, deploying a change is just:
+The backend is already declared as infrastructure-as-code in [neon.ts](neon.ts) — a Neon Function (`functions/src/index.ts`) plus the AI Gateway. `ANTHROPIC_API_KEY` is read from `process.env` when you deploy, so make sure it's in whatever `--env` file you pass (the root `.env` already has it).
 
 ```bash
-git add index.html
-git commit -m "Describe the change"
-git push origin main
+neon link                     # links this repo to your Neon project (writes .neon, gitignored)
+neon deploy --env .env        # provisions/updates the function + AI Gateway, uploads ANTHROPIC_API_KEY
+neon functions get api        # prints the function's public invocation_url
 ```
 
-Netlify picks up the push and publishes it. Deploy status and logs are under the site's **Deploys** tab.
+Keep that `invocation_url` — it's what `VITE_FUNCTIONS_URL` needs to point at in Part 2. It looks like `https://<branch-id>-api.compute.<cell>.<region>.aws.neon.tech`.
 
-## Option 2: Manual drag-and-drop
+Database schema/seed data (only needed once, or after a schema change):
 
-1. Open [app.netlify.com/drop](https://app.netlify.com/drop).
-2. Drag the project folder onto the page.
+```bash
+node db/migrate.mjs
+node db/seed-elements.mjs
+```
 
-This does not update on push. To update the site, drag the folder onto the site's **Deploys** tab again.
+These read `DATABASE_URL` from your local `.env` and run directly against Neon Postgres — no separate deploy step.
 
-## Option 3: Netlify CLI
+## Part 2: Deploy the frontend to Netlify
+
+Settings are already committed in [netlify.toml](netlify.toml) (base directory `web`, build command `npm run build`, publish directory `web/dist`), so Netlify's defaults just work once the site is connected.
+
+### Continuous deploy from GitHub (recommended)
+
+1. Sign in to [app.netlify.com](https://app.netlify.com).
+2. **Add new site → Import an existing project → GitHub**, authorize Netlify, pick the **ReactorX** repo.
+3. Netlify reads `netlify.toml` automatically — confirm branch is `main` and click **Deploy**.
+4. Once the first deploy finishes, go to **Site configuration → Environment variables** and add:
+
+   | Key | Value |
+   | --- | --- |
+   | `VITE_FUNCTIONS_URL` | the `invocation_url` from Part 1 |
+
+5. **Deploys → Trigger deploy → Deploy site** (env vars only take effect on the next build, not retroactively).
+
+After this, every push to `main` redeploys the frontend automatically. Deploying a backend change still needs its own `neon deploy`.
+
+### Netlify CLI (alternative)
 
 ```bash
 npm install -g netlify-cli
-netlify login
-netlify deploy --dir=. --prod
+netlify login                 # opens a browser, do this yourself
+netlify link                  # connect this repo to a Netlify site (or `netlify init` to create one)
+netlify env:set VITE_FUNCTIONS_URL "<the Neon function's invocation_url>"
+netlify deploy --prod
 ```
-
-Run `netlify deploy --dir=.` without `--prod` first to get a preview URL.
 
 ## Verifying a deploy
 
-Open the site URL and check:
-
-1. The 3D scene renders (floor grid, the two reactant molecules, the arrow).
-2. Pick two reactants, click **Balance equation** then **React**. The reaction animates.
-3. Click a molecule and a bond. The card opens.
-4. Open the browser console (F12). There should be no errors. A failed request for `three.min.js` means the CDN was blocked.
-
-## Virtual reality (WebXR)
-
-WebXR needs HTTPS. Netlify serves every site over HTTPS by default, so VR works on the deployed URL. On a headset browser such as Meta Quest Browser, open the site and use **Enter VR**, which appears only if the device supports it.
+1. Open the Netlify site URL. The hub scene should render (Ion, the starfield, the two rotating 3D nav models).
+2. Open the reaction chamber, pick two reactants, and react them.
+3. Click a molecule, then a bond — the molecule detail view should open.
+4. Click **Ask Ion** anywhere and ask a question. If you get a real, specific answer, the backend is wired correctly. If you get a generic answer tagged "offline answer", `VITE_FUNCTIONS_URL` is wrong, unset, or the Neon Function isn't responding — check `neon functions get api` and the Netlify env var match.
+5. Open the browser console (F12) — no errors expected.
 
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
 | --- | --- |
-| Blank page, console error about `THREE` | The Three.js CDN was blocked or offline. Check the network, or vendor `three.min.js` into the repo and update the `<script>` tag. |
-| Text looks like a default system font | Google Fonts was blocked. The app still works. |
-| Site shows an old version | Hard-refresh (Ctrl+Shift+R). On Netlify, check that the latest deploy under **Deploys** succeeded and is published. |
-| Push does not trigger a deploy | Confirm the site is linked to the right repo and that the deploy branch is `main` (**Site configuration → Build & deploy → Continuous deployment**). |
-| `git push` returns 403 | Git is signed in to a GitHub account without write access. Sign in as the repo owner. |
-| Deploy fails with a build error | The build command should be empty. Clear it in **Build & deploy → Build settings**. |
-| **Enter VR** does not appear | The browser or device does not support `immersive-vr`, or the page is not on HTTPS. |
-
-## Optional: `netlify.toml`
-
-Settings can be stored in the repo instead of the Netlify UI. If you want that, add a `netlify.toml` at the repo root:
-
-```toml
-[build]
-  publish = "."
-```
-
-This is not required, since the defaults above are enough.
+| Netlify build fails on `tsc -b` | A type error slipped through — run `cd web && npx tsc -b --noEmit` locally first. |
+| Site loads but every Ion chat reply is tagged "offline answer" | `VITE_FUNCTIONS_URL` isn't reaching a live Neon Function. Check it's set in Netlify's env vars and matches `neon functions get api`'s `invocation_url`, then trigger a fresh deploy. |
+| AI molecule/reaction lookups fail (chamber says "not a known molecule" for things that should work) | `ANTHROPIC_API_KEY` didn't make it into the deployed function — re-run `neon deploy --env .env` with that key present in the env file. |
+| Site shows an old version | Hard-refresh (Ctrl+Shift+R). Check the latest deploy under Netlify's **Deploys** tab succeeded. |
+| `git push` returns 403 | Git is signed in to a GitHub account without write access to `Ponnusa/ReactorX`. |
+| 3D scene is blank/mostly missing | Check the browser console — a failed model load (`web/public/models/*.glb`) or a WebGL context error is the usual cause. |

@@ -11,3 +11,4 @@ dist/
 # web/public/models/; keeping both tracked would double ~26MB of binary
 # data in the repo for no benefit.
 /glb/
+.neon
