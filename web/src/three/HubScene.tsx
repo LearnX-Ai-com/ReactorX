@@ -1,4 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
+import { useXR } from '@react-three/xr';
 import { Suspense, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { attachOrbitControls, type CameraOrbitState } from './orbitControls';
@@ -136,7 +137,13 @@ export function HubScene({ ionWaveKey, onSelectChamber, onSelectElements }: HubS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // In VR, the headset's own head tracking owns the camera transform — this
+  // orbit math would otherwise fight it every frame, snapping the view back
+  // to wherever the mouse/touch drag last left it instead of following the
+  // student's actual head movement.
+  const xrSession = useXR((s) => s.session);
   useFrame(() => {
+    if (xrSession) return;
     const camState = camStateRef.current;
     const camTarget = camTargetRef.current;
     camera.position.set(

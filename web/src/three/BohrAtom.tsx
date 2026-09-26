@@ -1,4 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
+import { useXR } from '@react-three/xr';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { ionChargeRange } from '../chemistry/bonds';
@@ -1061,6 +1062,9 @@ export const BohrAtomModel = forwardRef<BohrAtomHandle, BohrAtomModelProps>(func
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, onStateChange, driveCamera, viewMode]);
 
+  // The headset's own head tracking owns the camera transform once an XR
+  // session starts — see the driveCamera check below.
+  const xrSession = useXR((s) => s.session);
   useFrame((_, dt) => {
     const now = performance.now();
     // Frozen (or continuing smoothly from wherever it froze) while a
@@ -1192,7 +1196,7 @@ export const BohrAtomModel = forwardRef<BohrAtomHandle, BohrAtomModelProps>(func
       if (selected.isRing) selected.mat.opacity = 0.7 + 0.3 * pulse;
       else if (selected.mat.emissiveIntensity != null) selected.mat.emissiveIntensity = (selected.type === 'electron' ? 1.1 : 0.9) * pulse;
     }
-    if (driveCamera) {
+    if (driveCamera && !xrSession) {
       const camTarget = camTargetRef.current;
       camera.position.set(
         camTarget.x + camState.radius * Math.sin(camState.phi) * Math.sin(camState.theta),

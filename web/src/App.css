@@ -1160,11 +1160,36 @@ html, body { margin: 0; height: 100%; background: var(--bg); }
  * predict the card's height for every view mode/ionize state. */
 .ask-ion-btn-top { bottom: auto; top: 24px; }
 
+/* Top-right, next to nothing else — every screen's own controls cluster
+ * bottom or top-left, so this corner stays free everywhere. Only rendered
+ * at all when the browser reports immersive-vr support (App.tsx). */
+.enter-vr-btn {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(45, 212, 191, 0.12);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 10px 18px;
+  color: var(--accent-strong);
+  font-family: 'Space Grotesk', ui-sans-serif, sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.enter-vr-btn:hover { background: rgba(45, 212, 191, 0.2); }
+
 @media (max-width: 720px) {
   .detail-tabs { top: auto; bottom: 96px; left: 50%; }
   .molecule-detail-card { bottom: 148px; left: 12px; right: 12px; width: auto; }
   .ask-ion-btn { bottom: 96px; }
   .ask-ion-btn-top { top: 16px; bottom: auto; }
+  .enter-vr-btn { top: 16px; right: 16px; padding: 8px 14px; font-size: 12px; }
 }
 
 /* ---------------- chamber center wall: floating sky text ---------------- */

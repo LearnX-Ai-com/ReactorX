@@ -1,4 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
+import { useXR } from '@react-three/xr';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { oxidationBySymbol } from '../chemistry/bonds';
@@ -583,8 +584,13 @@ export const BondStoryViewerModel = forwardRef<BondStoryViewerHandle, BondStoryV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formula]);
 
+  // The electron/label animation itself (tickRef) keeps running in VR — only
+  // the orbit-camera positioning below needs to stand down, since the
+  // headset's head tracking owns the camera transform once a session starts.
+  const xrSession = useXR((s) => s.session);
   useFrame(() => {
     tickRef.current?.();
+    if (xrSession) return;
     const camState = camStateRef.current;
     const camTarget = camTargetRef.current;
     camera.position.set(

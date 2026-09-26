@@ -1,5 +1,6 @@
 import { Stars } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
+import { useXR } from '@react-three/xr';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { ELEMENTS } from '../chemistry/elements';
@@ -296,7 +297,12 @@ export function ChamberRoom({
     lookRef.current.zoomOffset = 0;
   }, [focusKey, focusWall, zoomed]);
 
+  // The headset's own head tracking owns the camera transform once an XR
+  // session starts — the wall-focus dolly/tween below would otherwise
+  // fight it every frame.
+  const xrSession = useXR((s) => s.session);
   useFrame((_, dt) => {
+    if (xrSession) return;
     const tween = focusTweenRef.current;
     if (tween) {
       const p = Math.min(1, (performance.now() - tween.start) / FOCUS_DURATION_MS);

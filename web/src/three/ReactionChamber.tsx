@@ -1,4 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
+import { useXR } from '@react-three/xr';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { bondList } from '../chemistry/bonds';
@@ -561,6 +562,11 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
       }
     }
 
+    // The headset's own head tracking owns the camera transform once an XR
+    // session starts — see the driveCamera check below (this only ever
+    // matters when driveCamera is true, i.e. this model isn't parked on a
+    // ChamberRoom wall — see the driveCamera doc above).
+    const xrSession = useXR((s) => s.session);
     useFrame((_, dt) => {
       const now = performance.now();
       [reactantGroupARef.current, reactantGroupBRef.current, ...productGroupsRef.current].forEach((g) => {
@@ -592,7 +598,7 @@ export const ReactionChamberModel = forwardRef<ReactionChamberHandle, ReactionCh
 
       updateReaction(now);
 
-      if (driveCamera) {
+      if (driveCamera && !xrSession) {
         const camTween = camTweenRef.current;
         const camState = camStateRef.current;
         if (camTween) {

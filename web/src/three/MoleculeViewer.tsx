@@ -1,4 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
+import { useXR } from '@react-three/xr';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { buildMoleculeMesh, disposeMoleculeMesh } from './moleculeMesh';
@@ -115,7 +116,11 @@ export function MoleculeViewerModel({ formula, onBondTap, onAtomTap }: MoleculeV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formula]);
 
+  // The headset's own head tracking owns the camera transform once an XR
+  // session starts — this orbit math would otherwise fight it every frame.
+  const xrSession = useXR((s) => s.session);
   useFrame(() => {
+    if (xrSession) return;
     const camState = camStateRef.current;
     camera.position.set(
       camState.radius * Math.sin(camState.phi) * Math.sin(camState.theta),

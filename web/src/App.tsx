@@ -25,6 +25,7 @@ import { BondStoryViewerModel, type BondStoryViewerHandle } from './three/BondSt
 import { IonChatBody } from './ion/ChatBody';
 import type { ChatContext } from './ion/answers';
 import { speak } from './ion/speech';
+import { xrStore } from './three/xr';
 
 type View = 'home' | 'chamber' | 'elements';
 
@@ -1180,6 +1181,34 @@ function Hub({ message, label, waveKey }: { message: string; label: string; wave
 
 /* ---------------- App shell ---------------- */
 
+/**
+ * Only rendered when the browser actually reports immersive-vr support
+ * (checked once via navigator.xr — most desktop/mobile browsers have no
+ * `navigator.xr` at all, and this stays hidden there rather than showing a
+ * button that would just fail). Starting an XR session has to happen from
+ * a real user gesture (a click handler), which is exactly what this is —
+ * xrStore.enterVR() can't be called on mount or from anywhere else.
+ * Visible across every screen (not just the hub) since AppCanvas's single
+ * persistent Canvas means whichever scene is currently active is what
+ * you'd see in the headset.
+ */
+function EnterVRButton() {
+  const [supported, setSupported] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    navigator.xr?.isSessionSupported('immersive-vr')
+      .then((ok) => { if (!cancelled) setSupported(ok); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  if (!supported) return null;
+  return (
+    <button type="button" className="enter-vr-btn" onClick={() => { void xrStore.enterVR(); }}>
+      {'\u{1F97D}'} Enter VR
+    </button>
+  );
+}
+
 function App() {
   const [view, setView] = useState<View>('home');
   const [hubWaveKey, setHubWaveKey] = useState(0);
@@ -1234,6 +1263,8 @@ function App() {
         {view === 'chamber' && <ChamberSceneContent c={chamber} />}
         {view === 'elements' && <ElementsSceneContent e={elements} />}
       </AppCanvas>
+
+      <EnterVRButton />
 
       {view === 'home' && <Hub message={hubMessage} label={hubLabel} waveKey={hubWaveKey} />}
       {view === 'chamber' && <ChamberOverlay c={chamber} onBack={goHome} onOpenChat={() => setChatOpen(true)} />}
